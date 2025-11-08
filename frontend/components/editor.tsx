@@ -9,14 +9,25 @@ import { findFileById, updateFileContent, inferLanguage, getInitialFileTree } fr
 import { cn } from "@/lib/utils";
 import EditorNav from "./editor-nav";
 import Preview from "./preview";
-import { useStream } from "@/hooks/useStream";
 
-export default function CodeEditor() {
+interface CodeEditorProps {
+  streamState: {
+    data: string;
+    isStreaming: boolean;
+    error: string | null;
+    sandboxUrl: string | null;
+    startStream: (prompt: string, backendUrl?: string) => Promise<void>;
+    stopStream: () => void;
+    resetStream: () => void;
+  };
+}
+
+export default function CodeEditor({ streamState }: CodeEditorProps) {
   const [files, setFiles] = useState<FileNode[]>(getInitialFileTree());
   const [openTabs, setOpenTabs] = useState<string[]>(["app-tsx"]);
   const [activeFileId, setActiveFileId] = useState<string>("app-tsx");
   const [activeTab, setActiveTab] = useState<'preview' | 'code'>('preview');
-  const { sandboxUrl, isStreaming } = useStream();
+  const { sandboxUrl, isStreaming } = streamState;
 
   const activeFile = findFileById(files, activeFileId);
 

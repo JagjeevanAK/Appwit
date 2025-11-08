@@ -3,18 +3,31 @@
 import { useState, useEffect, useRef } from "react";
 import InputBox from "./inputbox";
 import MarkdownRenderer from "./markdown-render";
-import { useStream } from "@/hooks/useStream";
 
 interface Message {
     content: string;
     type: 'user' | 'response';
 }
 
-export default function ChatBar(){
+interface ChatBarProps {
+    streamState: {
+        data: string;
+        isStreaming: boolean;
+        error: string | null;
+        sandboxUrl: string | null;
+        startStream: (prompt: string, backendUrl?: string) => Promise<void>;
+        stopStream: () => void;
+        resetStream: () => void;
+    };
+}
+
+export default function ChatBar({ streamState }: ChatBarProps){
     const [messages, setMessages] = useState<Message[]>([]);
     const messagesEndRef = useRef<HTMLDivElement>(null);
-    const { data, isStreaming, error, startStream, resetStream  } = useStream();
+    const { data, isStreaming, error, startStream, resetStream } = streamState;
     const [isWaitingForResponse, setIsWaitingForResponse] = useState(false);
+    const wasStreamingRef = useRef(false);
+    const shouldSaveMessageRef = useRef(false);
 
     const handleSendMessage = async (message: string) => {
         setMessages((prev) => [
@@ -23,26 +36,36 @@ export default function ChatBar(){
         ]);
 
         setIsWaitingForResponse(true);
+        shouldSaveMessageRef.current = true;
 
         try {
             await startStream(message);
-            
             setIsWaitingForResponse(false);
-            
-            setTimeout(() => {
-                if (data) {
-                    setMessages((prev) => [
-                        ...prev,
-                        { content: data, type: 'response' }
-                    ]);
-                    resetStream();
-                }
-            }, 100);
         } catch (err) {
             console.error('Error starting stream:', err);
             setIsWaitingForResponse(false);
+            shouldSaveMessageRef.current = false;
         }
     };
+
+    useEffect(() => {
+        // If we were streaming and now we're not, save the response
+        if (wasStreamingRef.current && !isStreaming && data && shouldSaveMessageRef.current) {
+            shouldSaveMessageRef.current = false;
+            
+            // Use queueMicrotask to avoid the cascading render warning
+            queueMicrotask(() => {
+                setMessages((prev) => [
+                    ...prev,
+                    { content: data, type: 'response' }
+                ]);
+                setTimeout(() => {
+                    resetStream();
+                }, 50);
+            });
+        }
+        wasStreamingRef.current = isStreaming;
+    }, [isStreaming, data, resetStream]);
 
     useEffect(() => {
         messagesEndRef.current?.scrollIntoView({ behavior: 'smooth' });

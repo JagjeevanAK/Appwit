@@ -7,17 +7,17 @@ export function useStream() {
     const [isStreaming, setIsStreaming] = useState(false);
     const [error, setError] = useState<string | null>(null);
     const [sandboxUrl, setSandboxUrl] = useState<string | null>(null);
+    const [sandboxId, setSandboxId] = useState<string | null>(null);
     const abortController = useRef<AbortController | null>(null);
 
     if(!BackendUrl){
         console.log("BACKEND_URL is not set in .env file")
     }
-    
+
     const startStream = async (prompt: string, backendUrl: string = BackendUrl || "") => {
         setIsStreaming(true);
         setData("");
         setError(null);
-        setSandboxUrl(null);
 
         try {
             abortController.current = new AbortController();
@@ -36,8 +36,17 @@ export function useStream() {
             }
 
             const sandboxUrlHeader = response.headers.get("X-Sandbox-URL");
+            const sandboxIdHeader = response.headers.get("X-Sandbox-ID");
+            
             if (sandboxUrlHeader) {
                 setSandboxUrl(sandboxUrlHeader);
+            } else {
+                console.log('No X-Sandbox-URL header found in response');
+            }
+
+            if (sandboxIdHeader) {
+                setSandboxId(sandboxIdHeader);
+                console.log('Sandbox ID:', sandboxIdHeader);
             }
 
             if (!response.body) {
@@ -75,7 +84,6 @@ export function useStream() {
     const resetStream = () => {
         setData("");
         setError(null);
-        setSandboxUrl(null);
     };
 
     return {
@@ -83,6 +91,7 @@ export function useStream() {
         isStreaming,
         error,
         sandboxUrl,
+        sandboxId,
         startStream,
         stopStream,
         resetStream,

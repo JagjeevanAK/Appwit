@@ -23,7 +23,7 @@ export default function Preview({ preview_url, isStreaming = false }: PreviewPro
             </div>
         );
     }
-
+    
     return (
         <iframe
             src={preview_url}

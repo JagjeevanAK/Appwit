@@ -1,5 +1,6 @@
 import { Sandbox } from "e2b"
 import express from "express";
+import cors from "cors";
 import { streamText, stepCountIs } from 'ai';
 import { SYSTEM_PROMPT } from "./agent/systemPrompt";
 import { createFile, updateFile, deleteFile, readFile, listFiles } from "./tools";
@@ -10,6 +11,11 @@ const port = process.env.PORT
 const TEMPLATE_ID = process.env.TEMPLATE_ID
 const SANDBOX_PORT = process.env.SANDBOX_PORT
 
+const activeSandboxes = new Map<string, Sandbox>();
+
+app.use(cors({
+    exposedHeaders: ['X-Sandbox-URL', 'X-Sandbox-ID']
+}));
 app.use(express.json());
 
 app.post("/prompt", async(req, res) => {
@@ -23,8 +29,11 @@ app.post("/prompt", async(req, res) => {
         
         const host = sandbox.getHost(parseInt(SANDBOX_PORT));
         const sandboxUrl = `https://${host}`;
+        const sandboxId = sandbox.sandboxId;
         
-        console.log(`Sandbox created: ${sandboxUrl}`);
+        activeSandboxes.set(sandboxId, sandbox);
+        
+        console.log(`Sandbox created: ${sandboxUrl}, ID: ${sandboxId}`);
         
         const response = await streamText({
             model: openrouter("anthropic/claude-4.5-sonnet"),
@@ -105,7 +114,8 @@ app.post("/prompt", async(req, res) => {
 
         response.pipeTextStreamToResponse(res, {
             headers: {
-                'X-Sandbox-URL': sandboxUrl
+                'X-Sandbox-URL': sandboxUrl,
+                'X-Sandbox-ID': sandboxId
             }
         });
     } catch (error) {
@@ -113,6 +123,74 @@ app.post("/prompt", async(req, res) => {
         if (!res.headersSent) {
             res.status(500).json({ error: 'Failed to create sandbox' });
         }
+    }
+});
+
+app.get("/read-files", async(req, res) => {
+    const { sandboxId, path } = req.query;
+
+    try {
+        if (!sandboxId || typeof sandboxId !== 'string') {
+            return res.status(400).json({ error: 'sandboxId is required' });
+        }
+
+        if (!path || typeof path !== 'string') {
+            return res.status(400).json({ error: 'path is required' });
+        }
+
+        const sandbox = activeSandboxes.get(sandboxId);
+        
+        if (!sandbox) {
+            return res.status(404).json({ error: 'Sandbox not found or expired' });
+        }
+
+        const content = await sandbox.files.read(path);
+        
+        res.json({ 
+            success: true, 
+            path,
+            content 
+        });
+    } catch (error) {
+        console.error('Error reading file:', error);
+        res.status(500).json({ 
+            error: 'Failed to read file',
+            message: error instanceof Error ? error.message : 'Unknown error'
+        });
+    }
+});
+
+app.get("/list-files", async(req, res) => {
+    const { sandboxId, path = '/home/user' } = req.query;
+
+    try {
+        if (!sandboxId || typeof sandboxId !== 'string') {
+            return res.status(400).json({ error: 'sandboxId is required' });
+        }
+
+        const sandbox = activeSandboxes.get(sandboxId);
+        
+        if (!sandbox) {
+            return res.status(404).json({ error: 'Sandbox not found or expired' });
+        }
+
+        const files = await sandbox.files.list(typeof path === 'string' ? path : '/home/user');
+        
+        res.json({ 
+            success: true, 
+            path,
+            files: files.map(f => ({
+                name: f.name,
+                type: f.type,
+                path: `${path}/${f.name}`
+            }))
+        });
+    } catch (error) {
+        console.error('Error listing files:', error);
+        res.status(500).json({ 
+            error: 'Failed to list files',
+            message: error instanceof Error ? error.message : 'Unknown error'
+        });
     }
 });
 
