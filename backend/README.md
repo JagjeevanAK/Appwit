@@ -1,4 +1,4 @@
-# lovable-e2b
+# versim backend
 
 To install dependencies:
 

@@ -1,7 +1,7 @@
 "use client"
 
 import React, { useState } from "react";
-import { ChevronRight, ChevronDown, File, Folder, FolderOpen } from "lucide-react";
+import { ChevronRight, ChevronDown, File, Folder, FolderOpen, Search } from "lucide-react";
 import { cn } from "@/lib/utils";
 
 export type FileNode = {
@@ -25,12 +25,37 @@ interface FileTreeItemProps {
   activeId?: string;
   onSelect: (id: string) => void;
   level: number;
+  searchQuery?: string;
 }
 
-function FileTreeItem({ node, activeId, onSelect, level }: FileTreeItemProps) {
+// Helper function to check if a node or its children match the search
+function nodeMatchesSearch(node: FileNode, query: string): boolean {
+  if (!query) return true;
+  
+  const lowerQuery = query.toLowerCase();
+  
+  // Check if current node matches
+  if (node.name.toLowerCase().includes(lowerQuery)) {
+    return true;
+  }
+  
+  // Check if any children match
+  if (node.children) {
+    return node.children.some(child => nodeMatchesSearch(child, query));
+  }
+  
+  return false;
+}
+
+function FileTreeItem({ node, activeId, onSelect, level, searchQuery = "" }: FileTreeItemProps) {
   const [isExpanded, setIsExpanded] = useState(true);
   const isActive = activeId === node.id;
   const isFolder = node.kind === "folder";
+
+  // Check if this node should be visible based on search
+  const shouldShow = nodeMatchesSearch(node, searchQuery);
+  
+  if (!shouldShow) return null;
 
   const handleClick = () => {
     if (isFolder) {
@@ -81,6 +106,7 @@ function FileTreeItem({ node, activeId, onSelect, level }: FileTreeItemProps) {
               activeId={activeId}
               onSelect={onSelect}
               level={level + 1}
+              searchQuery={searchQuery}
             />
           ))}
         </div>
@@ -90,18 +116,38 @@ function FileTreeItem({ node, activeId, onSelect, level }: FileTreeItemProps) {
 }
 
 export default function FileTree({ nodes, activeId, onSelect, level = 0 }: FileTreeProps) {
+  const [searchQuery, setSearchQuery] = useState("");
+
   return (
-      <div className="h-full overflow-auto bg-[#1D1D1D]">
-      <div className="py-2">
-        {nodes.map((node) => (
-          <FileTreeItem
-            key={node.id}
-            node={node}
-            activeId={activeId}
-            onSelect={onSelect}
-            level={level}
+    <div className="h-full flex flex-col bg-[#1D1D1D]">
+      {/* Search Input */}
+      <div className="px-2 py-2 border-b border-gray-800">
+        <div className="relative">
+          <Search className="absolute left-2 top-1/2 -translate-y-1/2 h-4 w-4 text-gray-400" />
+          <input
+            type="text"
+            placeholder="Search files..."
+            value={searchQuery}
+            onChange={(e) => setSearchQuery(e.target.value)}
+            className="w-full bg-[#2D2D2D] text-white text-sm pl-8 pr-3 py-1.5 rounded border border-gray-700 focus:border-blue-500 focus:outline-none placeholder-gray-500"
           />
-        ))}
+        </div>
+      </div>
+      
+      {/* File Tree */}
+      <div className="flex-1 overflow-auto">
+        <div className="py-2">
+          {nodes.map((node) => (
+            <FileTreeItem
+              key={node.id}
+              node={node}
+              activeId={activeId}
+              onSelect={onSelect}
+              level={level}
+              searchQuery={searchQuery}
+            />
+          ))}
+        </div>
       </div>
     </div>
   );
