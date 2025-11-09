@@ -1,6 +1,6 @@
 'use client'
 
-import { useState, useEffect, useRef } from "react";
+import { useState, useEffect, useRef, useCallback } from "react";
 import InputBox from "./inputbox";
 import MarkdownRenderer from "./markdown-render";
 
@@ -31,7 +31,7 @@ export default function ChatBar({ streamState, initialPrompt }: ChatBarProps){
     const shouldSaveMessageRef = useRef(false);
     const hasProcessedInitialPrompt = useRef(false);
 
-    const handleSendMessage = async (message: string) => {
+    const handleSendMessage = useCallback(async (message: string) => {
         setMessages((prev) => [
             ...prev, 
             { content: message, type: 'user' }
@@ -48,7 +48,7 @@ export default function ChatBar({ streamState, initialPrompt }: ChatBarProps){
             setIsWaitingForResponse(false);
             shouldSaveMessageRef.current = false;
         }
-    };
+    }, [startStream]);
 
     useEffect(() => {
         if (initialPrompt && !hasProcessedInitialPrompt.current) {
@@ -57,7 +57,7 @@ export default function ChatBar({ streamState, initialPrompt }: ChatBarProps){
                 handleSendMessage(initialPrompt);
             }, 0);
         }
-    }, [initialPrompt]);
+    }, [initialPrompt, handleSendMessage]);
 
 
     useEffect(() => {

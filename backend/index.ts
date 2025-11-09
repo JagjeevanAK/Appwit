@@ -36,7 +36,7 @@ app.post("/prompt", async(req, res) => {
         console.log(`Sandbox created: ${sandboxUrl}, ID: ${sandboxId}`);
         
         const response = await streamText({
-            model: openrouter("gpt-5-codex"),
+            model: openrouter("anthropic/claude-4.5-sonnet"),
             stopWhen: stepCountIs(10),
             tools: {
                 createFile: {
