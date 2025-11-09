@@ -1,5 +1,5 @@
 "use client";
-import { useState } from "react";
+import { useState, useCallback } from "react";
 import { BackendUrl } from "@/config";
 
 interface FileItem {
@@ -26,7 +26,7 @@ export function useSandboxFiles() {
 
     const baseUrl = BackendUrl || 'http://localhost:4000';
 
-    const readFile = async (sandboxId: string, filePath: string): Promise<string | null> => {
+    const readFile = useCallback(async (sandboxId: string, filePath: string): Promise<string | null> => {
         if (!sandboxId) {
             setError("Sandbox ID is required");
             return null;
@@ -61,9 +61,9 @@ export function useSandboxFiles() {
         } finally {
             setIsLoading(false);
         }
-    };
+    }, [baseUrl]);
 
-    const listFiles = async (sandboxId: string, dirPath: string = '/home/user'): Promise<FileItem[] | null> => {
+    const listFiles = useCallback(async (sandboxId: string, dirPath: string = '/home/user'): Promise<FileItem[] | null> => {
         if (!sandboxId) {
             setError("Sandbox ID is required");
             return null;
@@ -98,7 +98,7 @@ export function useSandboxFiles() {
         } finally {
             setIsLoading(false);
         }
-    };
+    }, [baseUrl]);
 
     return {
         readFile,

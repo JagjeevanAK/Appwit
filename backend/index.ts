@@ -126,7 +126,7 @@ app.post("/prompt", async(req, res) => {
     }
 });
 
-app.get("/read-files", async(req, res) => {
+app.get("/read-file", async(req, res) => {
     const { sandboxId, path } = req.query;
 
     try {

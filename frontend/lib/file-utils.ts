@@ -86,6 +86,11 @@ export async function fetchSandboxFileTree(
   listFilesFunc: (sandboxId: string, path: string) => Promise<SandboxFile[] | null>,
   basePath: string = '/home/user'
 ): Promise<FileNode[]> {
+  console.log('fetchSandboxFileTree called with:', { sandboxId, basePath });
+  
+  // Directories to exclude from traversal
+  const excludeDirs = ['node_modules', '.git', 'dist', 'build', '.next', '.vite', '.vite-temp'];
+  
   const allFiles: SandboxFile[] = [];
   const dirsToProcess: string[] = [basePath];
   const processedDirs = new Set<string>();
@@ -96,10 +101,20 @@ export async function fetchSandboxFileTree(
     if (processedDirs.has(currentPath)) continue;
     processedDirs.add(currentPath);
 
+    console.log('Fetching files from path:', currentPath);
     const files = await listFilesFunc(sandboxId, currentPath);
+    console.log('Got files:', files);
+    
     if (!files) continue;
 
     for (const file of files) {
+      // Skip excluded directories
+      const fileName = file.name;
+      if (file.type === 'dir' && excludeDirs.includes(fileName)) {
+        console.log('Skipping excluded directory:', fileName);
+        continue;
+      }
+      
       allFiles.push(file);
       
       if (file.type === 'dir') {
@@ -108,7 +123,10 @@ export async function fetchSandboxFileTree(
     }
   }
 
-  return buildFileTreeFromSandbox(allFiles, basePath);
+  console.log('Total files collected:', allFiles.length);
+  const tree = buildFileTreeFromSandbox(allFiles, basePath);
+  console.log('Built tree with nodes:', tree.length);
+  return tree;
 }
 
 export async function loadFileContent(
@@ -116,7 +134,12 @@ export async function loadFileContent(
   filePath: string,
   readFileFunc: (sandboxId: string, path: string) => Promise<string | null>
 ): Promise<string> {
+  console.log('loadFileContent called with:', { sandboxId, filePath });
+  console.log('readFileFunc type:', typeof readFileFunc);
+  
   const content = await readFileFunc(sandboxId, filePath);
+  console.log('Content received:', content ? `${content.length} chars` : 'null');
+  
   return content || '// Unable to load file content';
 }
 
@@ -137,4 +160,46 @@ export function updateFileNodeWithContent(
     }
     return node;
   });
+}
+
+export function mergeFileTrees(
+  oldTree: FileNode[],
+  newTree: FileNode[]
+): FileNode[] {
+  const oldNodeMap = new Map<string, FileNode>();
+  
+  const buildNodeMap = (nodes: FileNode[]) => {
+    for (const node of nodes) {
+      oldNodeMap.set(node.id, node);
+      if (node.children) {
+        buildNodeMap(node.children);
+      }
+    }
+  };
+  buildNodeMap(oldTree);
+
+  const mergeNodes = (newNodes: FileNode[]): FileNode[] => {
+    return newNodes.map((newNode) => {
+      const oldNode = oldNodeMap.get(newNode.id);
+      
+      if (!oldNode) {
+        return newNode;
+      }
+
+      const mergedNode: FileNode = {
+        ...newNode,
+        content: oldNode.content, // Preserve existing content
+      };
+
+      if (newNode.children && oldNode.children) {
+        mergedNode.children = mergeNodes(newNode.children);
+      } else if (newNode.children) {
+        mergedNode.children = mergeNodes(newNode.children);
+      }
+
+      return mergedNode;
+    });
+  };
+
+  return mergeNodes(newTree);
 }

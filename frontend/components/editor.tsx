@@ -5,7 +5,7 @@ import Editor from "@monaco-editor/react";
 import { X } from "lucide-react";
 import { ResizablePanelGroup, ResizablePanel, ResizableHandle } from "@/components/ui/resizable";
 import FileTree, { FileNode } from "@/components/file-tree";
-import { findFileById, inferLanguage, fetchSandboxFileTree, loadFileContent, updateFileNodeWithContent } from "@/lib/file-utils";
+import { findFileById, inferLanguage, fetchSandboxFileTree, loadFileContent, updateFileNodeWithContent, mergeFileTrees } from "@/lib/file-utils";
 import { cn } from "@/lib/utils";
 import EditorNav from "./editor-nav";
 import Preview from "./preview";
@@ -32,6 +32,7 @@ export default function CodeEditor({ streamState }: CodeEditorProps) {
   const [isLoadingFiles, setIsLoadingFiles] = useState(false);
   const { sandboxUrl, sandboxId, isStreaming } = streamState;
   const { listFiles, readFile } = useSandboxFiles();
+  const [hasInitialLoad, setHasInitialLoad] = useState(false);
 
   // Helper to find first file in tree
   const findFirstFile = useCallback((nodes: FileNode[]): FileNode | null => {
@@ -45,39 +46,106 @@ export default function CodeEditor({ streamState }: CodeEditorProps) {
     return null;
   }, []);
 
-  // Load sandbox files when sandboxId is available
-  useEffect(() => {
-    const loadSandboxFiles = async () => {
-      if (!sandboxId) return;
-      
+  const loadSandboxFiles = useCallback(async (isRefetch = false) => {
+    if (!sandboxId) {
+      console.log('No sandboxId available yet');
+      return;
+    }
+    
+    // Only show loading spinner on initial load, not during refetches
+    if (!isRefetch) {
       setIsLoadingFiles(true);
-      try {
-        console.log('Loading files from sandbox:', sandboxId);
-        const fileTree = await fetchSandboxFileTree(sandboxId, listFiles);
+    }
+    
+    console.log(isRefetch ? 'Refetching files from sandbox:' : 'Starting to load files from sandbox:', sandboxId);
+    
+    try {
+      const fileTree = await fetchSandboxFileTree(sandboxId, listFiles);
+      console.log('Fetched file tree:', fileTree);
+      
+      if (fileTree && fileTree.length > 0) {
+        setFiles(prevFiles => {
+          // On refetch, merge to preserve content
+          if (isRefetch && prevFiles.length > 0) {
+            return mergeFileTrees(prevFiles, fileTree);
+          }
+          return fileTree;
+        });
+        console.log('Files set, count:', fileTree.length);
         
-        if (fileTree && fileTree.length > 0) {
-          setFiles(fileTree);
-          // Reset tabs and select first file
+        // Only reset tabs on initial load, not on refetch
+        if (!isRefetch && !hasInitialLoad) {
           const firstFile = findFirstFile(fileTree);
           if (firstFile) {
+            console.log('First file found:', firstFile.name);
             setOpenTabs([firstFile.id]);
             setActiveFileId(firstFile.id);
           }
+          setHasInitialLoad(true);
+        } else if (isRefetch && activeFileId) {
+          // Reload content for currently active file
+          console.log('Reloading content for active file:', activeFileId);
+          const activeFile = findFileById(fileTree, activeFileId);
+          if (activeFile && activeFile.kind === 'file') {
+            try {
+              const content = await loadFileContent(sandboxId, activeFile.path, readFile);
+              setFiles(prevFiles => updateFileNodeWithContent(prevFiles, activeFileId, content));
+              console.log('Active file content reloaded smoothly');
+            } catch (error) {
+              console.error('Error reloading active file:', error);
+            }
+          }
         }
-      } catch (error) {
-        console.error('Error loading sandbox files:', error);
-      } finally {
+      } else {
+        console.log('File tree is empty or null');
+      }
+    } catch (error) {
+      console.error('Error loading sandbox files:', error);
+    } finally {
+      if (!isRefetch) {
+        console.log('Setting isLoadingFiles to false');
         setIsLoadingFiles(false);
       }
-    };
+    }
+  }, [sandboxId, listFiles, findFirstFile, hasInitialLoad, activeFileId, readFile]);
 
-    loadSandboxFiles();
-  }, [sandboxId, listFiles, findFirstFile]);
+  useEffect(() => {
+    if (sandboxId && !hasInitialLoad) {
+      loadSandboxFiles(false);
+    }
+  }, [sandboxId, hasInitialLoad, loadSandboxFiles]);
+
+  useEffect(() => {
+    if (!isStreaming || !sandboxId || !hasInitialLoad) {
+      return;
+    }
+
+    console.log('Starting file polling during stream...');
+    
+    const pollInterval = setInterval(() => {
+      console.log('Polling for file updates...');
+      loadSandboxFiles(true);
+    }, 2000);
+
+    return () => {
+      console.log('Stopping file polling');
+      clearInterval(pollInterval);
+    };
+  }, [isStreaming, sandboxId, hasInitialLoad, loadSandboxFiles]);
+
+  useEffect(() => {
+    if (!isStreaming && hasInitialLoad && sandboxId) {
+      console.log('Streaming completed, final refetch...');
+      loadSandboxFiles(true);
+    }
+  }, [isStreaming, hasInitialLoad, sandboxId, loadSandboxFiles]);
 
   const activeFile = findFileById(files, activeFileId);
 
   const handleFileSelect = async (id: string) => {
     const file = findFileById(files, id);
+    console.log('File selected:', { id, file, hasContent: !!file?.content, sandboxId });
+    
     if (file && file.kind === "file") {
       if (!openTabs.includes(id)) {
         setOpenTabs([...openTabs, id]);
@@ -85,8 +153,16 @@ export default function CodeEditor({ streamState }: CodeEditorProps) {
       setActiveFileId(id);
       
       if (!file.content && sandboxId) {
-        const content = await loadFileContent(sandboxId, file.path, readFile);
-        setFiles(prevFiles => updateFileNodeWithContent(prevFiles, id, content));
+        console.log('Loading content for file:', file.path);
+        try {
+          const content = await loadFileContent(sandboxId, file.path, readFile);
+          console.log('Content loaded, length:', content?.length);
+          setFiles(prevFiles => updateFileNodeWithContent(prevFiles, id, content));
+        } catch (error) {
+          console.error('Error loading file content:', error);
+        }
+      } else {
+        console.log('File already has content or no sandboxId');
       }
     }
   };
@@ -125,6 +201,13 @@ export default function CodeEditor({ streamState }: CodeEditorProps) {
                 <div className="text-center space-y-2">
                   <div className="animate-spin rounded-full h-8 w-8 border-b-2 border-white mx-auto"></div>
                   <p className="text-sm">Loading files...</p>
+                </div>
+              </div>
+            ) : files.length === 0 ? (
+              <div className="h-full flex items-center justify-center text-gray-400">
+                <div className="text-center space-y-2">
+                  <p className="text-sm">No files available</p>
+                  <p className="text-xs text-gray-500">Send a prompt to generate code</p>
                 </div>
               </div>
             ) : (
@@ -191,7 +274,16 @@ export default function CodeEditor({ streamState }: CodeEditorProps) {
                     automaticLayout: true,
                     scrollBeyondLastLine: false,
                     readOnly: true,
+                    smoothScrolling: true,
+                    cursorSmoothCaretAnimation: "on",
+                    renderLineHighlight: "all",
+                    renderWhitespace: "none",
                   }}
+                  loading={
+                    <div className="h-full flex items-center justify-center bg-[#1E1E1E]">
+                      <div className="animate-pulse text-gray-400">Loading content...</div>
+                    </div>
+                  }
                 />
               </div>
             )}
