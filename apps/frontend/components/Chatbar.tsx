@@ -4,9 +4,15 @@ import { useState, useEffect, useRef, useCallback } from "react";
 import InputBox from "./inputbox";
 import MarkdownRenderer from "./markdown-render";
 
+interface ToolCall {
+    name: string;
+    args: Record<string, unknown>;
+}
+
 interface Message {
     content: string;
     type: 'user' | 'response';
+    toolCalls?: ToolCall[];
 }
 
 interface ChatBarProps {
@@ -15,7 +21,10 @@ interface ChatBarProps {
         isStreaming: boolean;
         error: string | null;
         sandboxUrl: string | null;
+        sandboxId: string | null;
+        toolCalls: ToolCall[];
         startStream: (prompt: string, backendUrl?: string) => Promise<void>;
+        continueStream: (prompt: string, sandboxId: string) => Promise<void>;
         stopStream: () => void;
         resetStream: () => void;
     };
@@ -25,11 +34,18 @@ interface ChatBarProps {
 export default function ChatBar({ streamState, initialPrompt }: ChatBarProps){
     const [messages, setMessages] = useState<Message[]>([]);
     const messagesEndRef = useRef<HTMLDivElement>(null);
-    const { data, isStreaming, error, startStream, resetStream } = streamState;
+    const { data, isStreaming, error, sandboxId, toolCalls, startStream, continueStream, resetStream } = streamState;
     const [isWaitingForResponse, setIsWaitingForResponse] = useState(false);
     const wasStreamingRef = useRef(false);
     const shouldSaveMessageRef = useRef(false);
     const hasProcessedInitialPrompt = useRef(false);
+    const currentToolCallsRef = useRef<ToolCall[]>([]);
+
+    useEffect(() => {
+        if (isStreaming) {
+            currentToolCallsRef.current = toolCalls;
+        }
+    }, [toolCalls, isStreaming]);
 
     const handleSendMessage = useCallback(async (message: string) => {
         setMessages((prev) => [
@@ -39,16 +55,22 @@ export default function ChatBar({ streamState, initialPrompt }: ChatBarProps){
 
         setIsWaitingForResponse(true);
         shouldSaveMessageRef.current = true;
+        currentToolCallsRef.current = [];
 
         try {
-            await startStream(message);
+            if (sandboxId) {
+                console.log('Continuing conversation in sandbox:', sandboxId);
+                await continueStream(message, sandboxId);
+            } else {
+                await startStream(message);
+            }
             setIsWaitingForResponse(false);
         } catch (err) {
             console.error('Error starting stream:', err);
             setIsWaitingForResponse(false);
             shouldSaveMessageRef.current = false;
         }
-    }, [startStream]);
+    }, [startStream, continueStream, sandboxId]);
 
     useEffect(() => {
         if (initialPrompt && !hasProcessedInitialPrompt.current) {
@@ -61,15 +83,17 @@ export default function ChatBar({ streamState, initialPrompt }: ChatBarProps){
 
 
     useEffect(() => {
-        // If we were streaming and now we're not, save the response
         if (wasStreamingRef.current && !isStreaming && data && shouldSaveMessageRef.current) {
             shouldSaveMessageRef.current = false;
             
-            // Use queueMicrotask to avoid the cascading render warning
             queueMicrotask(() => {
                 setMessages((prev) => [
                     ...prev,
-                    { content: data, type: 'response' }
+                    { 
+                        content: data, 
+                        type: 'response',
+                        toolCalls: currentToolCallsRef.current.length > 0 ? [...currentToolCallsRef.current] : undefined
+                    }
                 ]);
                 setTimeout(() => {
                     resetStream();
@@ -102,16 +126,35 @@ export default function ChatBar({ streamState, initialPrompt }: ChatBarProps){
                             className="flex justify-start"
                         >
                             <div className="text-gray-300 p-4 max-w-[80%]">
+                                {message.toolCalls && message.toolCalls.length > 0 && (
+                                    <div className="mb-2 text-xs text-gray-500">
+                                        <span className="font-semibold">Tools used:</span>{' '}
+                                        {message.toolCalls.map((tc, i) => (
+                                            <span key={i} className="inline-block bg-gray-700 rounded px-2 py-0.5 mr-1">
+                                                {tc.name}
+                                            </span>
+                                        ))}
+                                    </div>
+                                )}
                                 <MarkdownRenderer markdown={message.content} />
                             </div>
                         </div>
-                    )
-                ))}
+                ))
+                )}
                 
-                {/* Show streaming response in real-time */}
                 {(isStreaming || isWaitingForResponse) && (
                     <div className="flex justify-start">
                         <div className="text-gray-300 p-4 max-w-[80%]">
+                            {toolCalls.length > 0 && (
+                                <div className="mb-2 text-xs text-gray-500">
+                                    <span className="font-semibold">Tools being used:</span>{' '}
+                                    {toolCalls.map((tc, i) => (
+                                        <span key={i} className="inline-block bg-blue-700/50 rounded px-2 py-0.5 mr-1 animate-pulse">
+                                            {tc.name}
+                                        </span>
+                                    ))}
+                                </div>
+                            )}
                             {data ? (
                                 <MarkdownRenderer markdown={data} />
                             ) : (
@@ -128,7 +171,6 @@ export default function ChatBar({ streamState, initialPrompt }: ChatBarProps){
                     </div>
                 )}
 
-                {/* Show error if exists */}
                 {error && !isStreaming && (
                     <div className="flex justify-start">
                         <div className="text-red-400 p-4 max-w-[80%] bg-red-900/20 rounded-lg">
