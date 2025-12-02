@@ -3,18 +3,36 @@ import { BackendUrl } from "@/config";
 import { useState, useRef, useCallback } from "react";
 
 interface StreamEvent {
-    type: 'text' | 'tool_call' | 'tool_result' | 'done' | 'error';
+    type: 'text' | 'tool_call' | 'tool_result' | 'done' | 'error' | 'plan' | 'worker_start' | 'worker_complete' | 'review_start' | 'review_complete';
     content?: string;
     name?: string;
     args?: Record<string, unknown>;
     message?: string;
     sandboxUrl?: string;
     sandboxId?: string;
+    taskId?: number;
+    file?: string;
+    success?: boolean;
+    plan?: {
+        summary: string;
+        tasks: Array<{ id: number; file: string; action: string; description: string }>;
+    };
+    review?: {
+        status: string;
+        message?: string;
+        problems?: string[];
+    };
 }
 
 interface ToolCall {
     name: string;
     args: Record<string, unknown>;
+}
+
+export interface FileChange {
+    action: 'create' | 'update' | 'delete';
+    path: string;
+    content?: string;
 }
 
 export function useStream() {
@@ -24,6 +42,7 @@ export function useStream() {
     const [sandboxUrl, setSandboxUrl] = useState<string | null>(null);
     const [sandboxId, setSandboxId] = useState<string | null>(null);
     const [toolCalls, setToolCalls] = useState<ToolCall[]>([]);
+    const [fileChanges, setFileChanges] = useState<FileChange[]>([]);
     const abortController = useRef<AbortController | null>(null);
 
     if(!BackendUrl){
@@ -39,11 +58,27 @@ export function useStream() {
         }
     };
 
+    const processToolCall = (name: string, args: Record<string, unknown>) => {
+        const fileOps = ['createFile', 'updateFile', 'deleteFile'];
+        if (fileOps.includes(name) && args.location) {
+            const action = name === 'createFile' ? 'create' 
+                : name === 'updateFile' ? 'update' 
+                : 'delete';
+            
+            setFileChanges(prev => [...prev, {
+                action: action as FileChange['action'],
+                path: args.location as string,
+                content: args.content as string | undefined
+            }]);
+        }
+    };
+
     const startStream = async (prompt: string, backendUrl: string = `${BackendUrl}/prompt` || "") => {
         setIsStreaming(true);
         setData("");
         setError(null);
         setToolCalls([]);
+        setFileChanges([]);
 
         try {
             abortController.current = new AbortController();
@@ -108,11 +143,32 @@ export function useStream() {
                         case 'tool_call':
                             if (event.name && event.args) {
                                 setToolCalls((prev) => [...prev, { name: event.name!, args: event.args! }]);
+                                processToolCall(event.name, event.args);
                                 console.log('Tool call:', event.name, event.args);
                             }
                             break;
                         case 'tool_result':
                             console.log('Tool result:', event.name, event.content);
+                            break;
+                        case 'plan':
+                            if (event.plan) {
+                                console.log('Plan received:', event.plan.summary);
+                            }
+                            break;
+                        case 'worker_start':
+                            console.log('Worker started:', event.taskId, event.file);
+                            break;
+                        case 'worker_complete':
+                            if (event.file) {
+                                setFileChanges(prev => [...prev, {
+                                    action: 'update',
+                                    path: event.file!
+                                }]);
+                            }
+                            console.log('Worker complete:', event.taskId, event.file, event.success);
+                            break;
+                        case 'review_complete':
+                            console.log('Review complete:', event.review);
                             break;
                         case 'done':
                             if (event.sandboxUrl) setSandboxUrl(event.sandboxUrl);
@@ -147,6 +203,7 @@ export function useStream() {
         setData("");
         setError(null);
         setToolCalls([]);
+        setFileChanges([]);
 
         try {
             abortController.current = new AbortController();
@@ -203,11 +260,20 @@ export function useStream() {
                         case 'tool_call':
                             if (event.name && event.args) {
                                 setToolCalls((prev) => [...prev, { name: event.name!, args: event.args! }]);
+                                processToolCall(event.name, event.args);
                                 console.log('Tool call:', event.name, event.args);
                             }
                             break;
                         case 'tool_result':
                             console.log('Tool result:', event.name, event.content);
+                            break;
+                        case 'worker_complete':
+                            if (event.file) {
+                                setFileChanges(prev => [...prev, {
+                                    action: 'update',
+                                    path: event.file!
+                                }]);
+                            }
                             break;
                         case 'done':
                             break;
@@ -236,7 +302,12 @@ export function useStream() {
         setData("");
         setError(null);
         setToolCalls([]);
+        setFileChanges([]);
     };
+
+    const clearFileChanges = useCallback(() => {
+        setFileChanges([]);
+    }, []);
 
     return {
         data,
@@ -245,9 +316,11 @@ export function useStream() {
         sandboxUrl,
         sandboxId,
         toolCalls,
+        fileChanges,
         startStream,
         continueStream,
         stopStream,
         resetStream,
+        clearFileChanges,
     };
 }

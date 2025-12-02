@@ -1,5 +1,14 @@
 import { z } from "zod";
 
+export const FileContentSchema = z.object({
+    filePath: z.string().describe("Absolute path to the file, e.g. /home/user/src/components/Button.tsx"),
+    content: z.string().describe("Complete file content"),
+});
+
+export const CodeGenerationSchema = z.object({
+    files: z.array(FileContentSchema).describe("Array of files to create/update with their complete content"),
+});
+
 export const TaskSchema = z.object({
     id: z.number(),
     file: z.string(),
@@ -19,6 +28,8 @@ export const ReviewResultSchema = z.object({
     suggestions: z.array(z.string()).optional(),
 });
 
+export type FileContent = z.infer<typeof FileContentSchema>;
+export type CodeGeneration = z.infer<typeof CodeGenerationSchema>;
 export type Task = z.infer<typeof TaskSchema>;
 export type Plan = z.infer<typeof PlanSchema>;
 export type ReviewResult = z.infer<typeof ReviewResultSchema>;

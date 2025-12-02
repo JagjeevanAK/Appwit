@@ -44,41 +44,52 @@ export function buildFileTreeFromSandbox(files: SandboxFile[], basePath: string 
   const tree: FileNode[] = [];
   const pathMap = new Map<string, FileNode>();
 
-  // Sort files to process directories first
-  const sortedFiles = [...files].sort((a, b) => {
-    if (a.type === 'dir' && b.type === 'file') return -1;
-    if (a.type === 'file' && b.type === 'dir') return 1;
-    return a.name.localeCompare(b.name);
-  });
-
-  for (const file of sortedFiles) {
-    const id = file.path.replace(/\//g, '-').replace(/^-/, '');
+  // First pass: create all nodes and add to pathMap
+  for (const file of files) {
+    const fullPath = file.path;
     const node: FileNode = {
-      id,
+      id: fullPath,
       name: file.name,
       kind: file.type === 'dir' ? 'folder' : 'file',
-      path: file.path,
+      path: fullPath,
       children: file.type === 'dir' ? [] : undefined,
     };
+    pathMap.set(fullPath, node);
+  }
 
-    pathMap.set(file.path, node);
-
-    // Determine parent path
+  // Second pass: build parent-child relationships
+  for (const file of files) {
+    const node = pathMap.get(file.path)!;
     const parentPath = file.path.substring(0, file.path.lastIndexOf('/'));
     
     if (parentPath === basePath || parentPath === '') {
-      // Root level file/folder
       tree.push(node);
     } else {
-      // Find parent and add as child
       const parent = pathMap.get(parentPath);
       if (parent && parent.children) {
         parent.children.push(node);
+      } else {
+        tree.push(node);
       }
     }
   }
 
-  return tree;
+  // Sort: folders first, then alphabetically
+  const sortNodes = (nodes: FileNode[]): FileNode[] => {
+    nodes.sort((a, b) => {
+      if (a.kind === 'folder' && b.kind === 'file') return -1;
+      if (a.kind === 'file' && b.kind === 'folder') return 1;
+      return a.name.localeCompare(b.name);
+    });
+    for (const node of nodes) {
+      if (node.children) {
+        sortNodes(node.children);
+      }
+    }
+    return nodes;
+  };
+
+  return sortNodes(tree);
 }
 
 export async function fetchSandboxFileTree(

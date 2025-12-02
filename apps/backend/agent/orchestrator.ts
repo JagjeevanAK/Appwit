@@ -1,14 +1,16 @@
-import { createAgent, toolCallLimitMiddleware } from "langchain";
+import { StateGraph, Send, Annotation, START, END } from "@langchain/langgraph";
 import { ChatOpenAI } from "@langchain/openai";
 import { HumanMessage, SystemMessage } from "@langchain/core/messages";
 import type { Sandbox } from "e2b";
-import { createSandboxTools } from "../tools";
-import { PLANNER_PROMPT, WORKER_PROMPT, REVIEWER_PROMPT } from "./prompts";
-import { PlanSchema, ReviewResultSchema } from "./types";
-import type { Plan, Task, WorkerResult, ReviewResult } from "./types";
+import { CODER_PROMPT } from "./prompts";
+import { CodeGenerationSchema } from "./types";
+import type { FileContent, CodeGeneration } from "./types";
 
-const MAX_WORKERS = 4;
-const WORKER_TOOL_LIMIT = 10;
+const log = {
+    coder: (msg: string, ...args: unknown[]) => console.log(`\x1b[36m[CODER]\x1b[0m ${msg}`, ...args),
+    writer: (file: string, msg: string, ...args: unknown[]) => console.log(`\x1b[33m[WRITER ${file}]\x1b[0m ${msg}`, ...args),
+    orchestrator: (msg: string, ...args: unknown[]) => console.log(`\x1b[32m[ORCHESTRATOR]\x1b[0m ${msg}`, ...args),
+};
 
 const createModel = (temperature = 0) => {
     return new ChatOpenAI({
@@ -21,250 +23,179 @@ const createModel = (temperature = 0) => {
     });
 };
 
-async function runPlannerAgent(userPrompt: string): Promise<Plan> {
-    const model = createModel();
-    
-    const response = await model.invoke([
-        new SystemMessage(PLANNER_PROMPT),
-        new HumanMessage(userPrompt)
-    ]);
+const OrchestratorState = Annotation.Root({
+    userPrompt: Annotation<string>(),
+    files: Annotation<FileContent[]>(),
+    writtenFiles: Annotation<string[]>({
+        reducer: (curr, update) => [...curr, ...update],
+        default: () => [],
+    }),
+    sandbox: Annotation<Sandbox>(),
+});
 
-    const content = typeof response.content === 'string' 
-        ? response.content 
-        : JSON.stringify(response.content);
+const WriterState = Annotation.Root({
+    filePath: Annotation<string>(),
+    content: Annotation<string>(),
+    sandbox: Annotation<Sandbox>(),
+});
+
+type OrchestratorStateType = typeof OrchestratorState.State;
+type WriterStateType = typeof WriterState.State;
+
+async function coderNode(state: OrchestratorStateType): Promise<Partial<OrchestratorStateType>> {
+    log.coder('Generating code...');
+    log.coder('Prompt:', state.userPrompt.slice(0, 100) + (state.userPrompt.length > 100 ? '...' : ''));
     
-    const jsonMatch = content.match(/\{[\s\S]*\}/);
-    if (!jsonMatch) {
-        throw new Error("Planner did not return valid JSON");
-    }
+    const startTime = Date.now();
+    const model = createModel().withStructuredOutput(CodeGenerationSchema);
     
-    const parsed = JSON.parse(jsonMatch[0]);
-    return PlanSchema.parse(parsed);
+    const result = await model.invoke([
+        new SystemMessage(CODER_PROMPT),
+        new HumanMessage(state.userPrompt)
+    ]);
+    
+    const duration = ((Date.now() - startTime) / 1000).toFixed(1);
+    log.coder(`Generated ${result.files.length} files in ${duration}s`);
+    result.files.forEach(f => log.coder(`  - ${f.filePath}`));
+
+    return { files: result.files };
 }
 
-function createWorkerAgent(sandbox: Sandbox, task: Task) {
-    const tools = createSandboxTools(sandbox);
-    const model = createModel();
-    
-    const taskPrompt = `${WORKER_PROMPT}
+function assignWriters(state: OrchestratorStateType): Send[] {
+    if (!state.files || state.files.length === 0) {
+        log.orchestrator('No files to write');
+        return [];
+    }
 
-YOUR ASSIGNED TASK:
-- File: ${task.file}
-- Action: ${task.action}
-- Description: ${task.description}
+    log.orchestrator(`Spawning ${state.files.length} parallel writers...`);
 
-Complete this task now.`;
-
-    return createAgent({
-        model,
-        tools,
-        systemPrompt: taskPrompt,
-        middleware: [
-            toolCallLimitMiddleware({ runLimit: WORKER_TOOL_LIMIT })
-        ]
+    return state.files.map(file => {
+        return new Send("writer", { 
+            filePath: file.filePath, 
+            content: file.content, 
+            sandbox: state.sandbox 
+        });
     });
 }
 
-async function runWorkerAgent(
-    sandbox: Sandbox, 
-    task: Task,
-    onProgress?: (event: WorkerEvent) => void
-): Promise<WorkerResult> {
-    const agent = createWorkerAgent(sandbox, task);
+async function writerNode(state: WriterStateType): Promise<{ writtenFiles: string[] }> {
+    const { filePath, content, sandbox } = state;
+    
+    log.writer(filePath, 'Writing file...');
     
     try {
-        onProgress?.({
-            type: 'worker_start',
-            taskId: task.id,
-            file: task.file
-        });
-
-        const result = await agent.invoke({
-            messages: [new HumanMessage(`Implement the task for ${task.file}: ${task.description}`)]
-        });
-
-        const lastMessage = result.messages[result.messages.length - 1];
-        const content = lastMessage 
-            ? (typeof lastMessage.content === 'string' ? lastMessage.content : JSON.stringify(lastMessage.content))
-            : 'Task completed';
-
-        onProgress?.({
-            type: 'worker_complete',
-            taskId: task.id,
-            file: task.file,
-            success: true
-        });
-
-        return {
-            taskId: task.id,
-            file: task.file,
-            success: true,
-            message: content
-        };
+        const dir = filePath.substring(0, filePath.lastIndexOf('/'));
+        if (dir) {
+            await sandbox.commands.run(`mkdir -p ${dir}`);
+        }
+        
+        await sandbox.files.write(filePath, content);
+        
+        log.writer(filePath, 'Done');
+        
+        return { writtenFiles: [filePath] };
     } catch (error) {
         const errorMessage = error instanceof Error ? error.message : String(error);
+        log.writer(filePath, `Failed: ${errorMessage}`);
         
-        onProgress?.({
-            type: 'worker_complete',
-            taskId: task.id,
-            file: task.file,
-            success: false,
-            error: errorMessage
-        });
-
-        return {
-            taskId: task.id,
-            file: task.file,
-            success: false,
-            message: `Error: ${errorMessage}`
-        };
+        return { writtenFiles: [] };
     }
 }
 
-async function runReviewerAgent(
-    sandbox: Sandbox, 
-    plan: Plan, 
-    workerResults: WorkerResult[]
-): Promise<ReviewResult> {
-    const tools = createSandboxTools(sandbox).filter(t => 
-        ['readFile', 'listFiles'].includes(t.name)
-    );
-    const model = createModel();
+function createOrchestratorGraph(sandbox: Sandbox) {
+    const graph = new StateGraph(OrchestratorState)
+        .addNode("coder", coderNode)
+        .addNode("writer", writerNode, { defer: true })
+        .addEdge(START, "coder")
+        .addConditionalEdges("coder", assignWriters, ["writer"])
+        .addEdge("writer", END);
 
-    const reviewContext = `
-Files that were modified:
-${plan.tasks.map(t => `- ${t.file} (${t.action}): ${t.description}`).join('\n')}
-
-Worker Results:
-${workerResults.map(r => `- Task ${r.taskId} (${r.file}): ${r.success ? 'Success' : 'Failed'} - ${r.message.slice(0, 200)}`).join('\n')}
-
-Please review all the files and verify they work together correctly.`;
-
-    const agent = createAgent({
-        model,
-        tools,
-        systemPrompt: REVIEWER_PROMPT,
-        middleware: [
-            toolCallLimitMiddleware({ runLimit: 10 })
-        ]
-    });
-
-    const result = await agent.invoke({
-        messages: [new HumanMessage(reviewContext)]
-    });
-
-    const lastMessage = result.messages[result.messages.length - 1];
-    const content = lastMessage
-        ? (typeof lastMessage.content === 'string' ? lastMessage.content : JSON.stringify(lastMessage.content))
-        : '';
-
-    const jsonMatch = content.match(/\{[\s\S]*\}/);
-    if (!jsonMatch) {
-        return {
-            status: 'success',
-            message: content
-        };
-    }
-
-    try {
-        const parsed = JSON.parse(jsonMatch[0]);
-        return ReviewResultSchema.parse(parsed);
-    } catch {
-        return {
-            status: 'success',
-            message: content
-        };
-    }
+    return graph.compile();
 }
 
 export interface WorkerEvent {
-    type: 'plan' | 'worker_start' | 'worker_complete' | 'review_start' | 'review_complete' | 'done';
-    taskId?: number;
+    type: 'generating' | 'files_ready' | 'file_writing' | 'file_written' | 'done' | 'error';
     file?: string;
+    files?: FileContent[];
     success?: boolean;
     error?: string;
-    plan?: Plan;
-    review?: ReviewResult;
-}
-
-export interface OrchestratorOptions {
-    maxWorkers?: number;
-    onProgress?: (event: WorkerEvent) => void;
+    message?: string;
 }
 
 export async function runMultiAgentOrchestrator(
     sandbox: Sandbox,
-    userPrompt: string,
-    options: OrchestratorOptions = {}
+    userPrompt: string
 ): Promise<{
-    plan: Plan;
-    workerResults: WorkerResult[];
-    review: ReviewResult;
+    files: FileContent[];
+    writtenFiles: string[];
 }> {
-    const { maxWorkers = MAX_WORKERS, onProgress } = options;
+    log.orchestrator('Starting Code Generation');
 
-    const plan = await runPlannerAgent(userPrompt);
-    onProgress?.({ type: 'plan', plan });
+    const graph = createOrchestratorGraph(sandbox);
+    const result = await graph.invoke({ userPrompt, sandbox });
 
-    const tasksToRun = plan.tasks.slice(0, maxWorkers);
-    
-    const workerPromises = tasksToRun.map(task => 
-        runWorkerAgent(sandbox, task, onProgress)
-    );
-    
-    const workerResults = await Promise.all(workerPromises);
-
-    onProgress?.({ type: 'review_start' });
-    const review = await runReviewerAgent(sandbox, plan, workerResults);
-    onProgress?.({ type: 'review_complete', review });
-
-    onProgress?.({ type: 'done' });
+    log.orchestrator('Code Generation Complete');
 
     return {
-        plan,
-        workerResults,
-        review
+        files: result.files,
+        writtenFiles: result.writtenFiles
     };
 }
 
 export async function* streamMultiAgentOrchestrator(
     sandbox: Sandbox,
-    userPrompt: string,
-    options: OrchestratorOptions = {}
+    userPrompt: string
 ): AsyncGenerator<WorkerEvent> {
-    const { maxWorkers = MAX_WORKERS } = options;
+    log.orchestrator('Starting Code Generation');
 
-    yield { type: 'plan' as const };
-    const plan = await runPlannerAgent(userPrompt);
-    yield { type: 'plan' as const, plan };
-
-    const tasksToRun = plan.tasks.slice(0, maxWorkers);
+    const graph = createOrchestratorGraph(sandbox);
     
-    for (const task of tasksToRun) {
-        yield { type: 'worker_start' as const, taskId: task.id, file: task.file };
+    yield { type: 'generating', message: 'Generating code...' };
+
+    try {
+        const stream = graph.streamEvents(
+            { userPrompt, sandbox },
+            { version: "v2" }
+        );
+
+        let files: FileContent[] = [];
+        const emittedWriteStarts = new Set<string>();
+        const emittedWriteCompletes = new Set<string>();
+
+        for await (const event of stream) {
+            if (event.event === "on_chain_end") {
+                if (event.name === "coder" && event.data?.output?.files) {
+                    files = event.data.output.files as FileContent[];
+                    yield { type: 'files_ready', files };
+                    
+                    for (const file of files) {
+                        if (!emittedWriteStarts.has(file.filePath)) {
+                            emittedWriteStarts.add(file.filePath);
+                            yield { type: 'file_writing', file: file.filePath };
+                        }
+                    }
+                }
+                
+                if (event.name === "writer" && event.data?.output?.writtenFiles) {
+                    const written = event.data.output.writtenFiles as string[];
+                    for (const filePath of written) {
+                        if (!emittedWriteCompletes.has(filePath)) {
+                            emittedWriteCompletes.add(filePath);
+                            yield { type: 'file_written', file: filePath, success: true };
+                        }
+                    }
+                }
+            }
+        }
+
+        log.orchestrator('Code Generation Complete');
+        yield { type: 'done' };
+
+    } catch (error) {
+        const errorMessage = error instanceof Error ? error.message : String(error);
+        log.orchestrator(`Error: ${errorMessage}`);
+        yield { type: 'error', error: errorMessage, message: 'Code generation failed' };
     }
-
-    const workerPromises = tasksToRun.map(task => 
-        runWorkerAgent(sandbox, task)
-    );
-    
-    const workerResults = await Promise.all(workerPromises);
-    
-    for (const result of workerResults) {
-        yield { 
-            type: 'worker_complete' as const, 
-            taskId: result.taskId, 
-            file: result.file,
-            success: result.success,
-            error: result.success ? undefined : result.message
-        };
-    }
-
-    yield { type: 'review_start' as const };
-    const review = await runReviewerAgent(sandbox, plan, workerResults);
-    yield { type: 'review_complete' as const, review };
-
-    yield { type: 'done' as const };
 }
 
 export { createAgentGraph, type AgentGraph, streamAgentResponse, runAgent } from "./graph";

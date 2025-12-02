@@ -1,6 +1,6 @@
 "use client"
 
-import React, { useState, useEffect, useCallback } from "react";
+import React, { useState, useEffect, useCallback, useRef } from "react";
 import Editor from "@monaco-editor/react";
 import { X } from "lucide-react";
 import { ResizablePanelGroup, ResizablePanel, ResizableHandle } from "@/components/ui/resizable";
@@ -10,6 +10,7 @@ import { cn } from "@/lib/utils";
 import EditorNav from "./editor-nav";
 import Preview from "./preview";
 import { useSandboxFiles } from "@/hooks/useSandboxFiles";
+import type { FileChange } from "@/hooks/useStream";
 
 interface CodeEditorProps {
   streamState: {
@@ -18,9 +19,11 @@ interface CodeEditorProps {
     error: string | null;
     sandboxUrl: string | null;
     sandboxId: string | null;
+    fileChanges: FileChange[];
     startStream: (prompt: string, backendUrl?: string) => Promise<void>;
     stopStream: () => void;
     resetStream: () => void;
+    clearFileChanges: () => void;
   };
 }
 
@@ -30,9 +33,10 @@ export default function CodeEditor({ streamState }: CodeEditorProps) {
   const [activeFileId, setActiveFileId] = useState<string>("");
   const [activeTab, setActiveTab] = useState<'preview' | 'code'>('preview');
   const [isLoadingFiles, setIsLoadingFiles] = useState(false);
-  const { sandboxUrl, sandboxId, isStreaming } = streamState;
+  const { sandboxUrl, sandboxId, isStreaming, fileChanges, clearFileChanges } = streamState;
   const { listFiles, readFile } = useSandboxFiles();
   const [hasInitialLoad, setHasInitialLoad] = useState(false);
+  const processedChangesRef = useRef<number>(0);
 
   // Helper to find first file in tree
   const findFirstFile = useCallback((nodes: FileNode[]): FileNode | null => {
@@ -116,19 +120,53 @@ export default function CodeEditor({ streamState }: CodeEditorProps) {
   }, [sandboxId, hasInitialLoad, loadSandboxFiles]);
 
   useEffect(() => {
+    if (!sandboxId || !hasInitialLoad || fileChanges.length === 0) {
+      return;
+    }
+
+    const newChanges = fileChanges.slice(processedChangesRef.current);
+    if (newChanges.length === 0) return;
+
+    processedChangesRef.current = fileChanges.length;
+
+    const processChanges = async () => {
+      for (const change of newChanges) {
+        console.log('Live file update:', change.action, change.path);
+        
+        if (change.action === 'create' || change.action === 'update') {
+          try {
+            const content = await readFile(sandboxId, change.path);
+            if (content) {
+              setFiles(prevFiles => {
+                const existingFile = findFileById(prevFiles, change.path);
+                if (existingFile) {
+                  return updateFileNodeWithContent(prevFiles, change.path, content);
+                }
+                return prevFiles;
+              });
+            }
+          } catch (error) {
+            console.error('Error fetching updated file:', error);
+          }
+        }
+      }
+      
+      await loadSandboxFiles(true);
+    };
+
+    processChanges();
+  }, [fileChanges, sandboxId, hasInitialLoad, loadSandboxFiles, readFile]);
+
+  useEffect(() => {
     if (!isStreaming || !sandboxId || !hasInitialLoad) {
       return;
     }
 
-    console.log('Starting file polling during stream...');
-    
     const pollInterval = setInterval(() => {
-      console.log('Polling for file updates...');
       loadSandboxFiles(true);
-    }, 2000);
+    }, 3000);
 
     return () => {
-      console.log('Stopping file polling');
       clearInterval(pollInterval);
     };
   }, [isStreaming, sandboxId, hasInitialLoad, loadSandboxFiles]);
@@ -137,8 +175,10 @@ export default function CodeEditor({ streamState }: CodeEditorProps) {
     if (!isStreaming && hasInitialLoad && sandboxId) {
       console.log('Streaming completed, final refetch...');
       loadSandboxFiles(true);
+      processedChangesRef.current = 0;
+      clearFileChanges();
     }
-  }, [isStreaming, hasInitialLoad, sandboxId, loadSandboxFiles]);
+  }, [isStreaming, hasInitialLoad, sandboxId, loadSandboxFiles, clearFileChanges]);
 
   const activeFile = findFileById(files, activeFileId);
 
