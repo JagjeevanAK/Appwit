@@ -1,0 +1,290 @@
+<!DOCTYPE html>
+<html>
+
+<head>
+  <title>Items List</title>
+  <script src="https://cdn.tailwindcss.com"></script>
+  <style>
+    .detail {
+      display: none;
+    }
+
+    .open {
+      display: table-row;
+    }
+
+    .codeblock {
+      white-space: pre-wrap;
+      padding: 10px;
+      border: 1px solid #ccc;
+      height: 300px;
+      overflow-y: auto;
+      font-family: monospace;
+      text-indent: 0;
+      flex: 1;
+    }
+
+    /* Modal Styles */
+    .modal {
+      display: none;
+      position: fixed;
+      z-index: 1;
+      left: 0;
+      top: 0;
+      width: 100%;
+      height: 100%;
+      background-color: rgba(0, 0, 0, 0.7);
+    }
+
+    .modal-content {
+      background-color: #fefefe;
+      margin: 50px auto 0px;
+      padding: 0px 20px 20px;
+      border-radius: 5px;
+      border: 1px solid #888;
+      width: 80%;
+      height: 80%;
+      box-shadow: 0 4px 8px 0 rgba(0, 0, 0, 0.2);
+      overflow: auto;
+    }
+
+    .close {
+      color: #aaa;
+      float: right;
+      font-size: 28px;
+      font-weight: bold;
+    }
+
+    .close:hover,
+    .close:focus {
+      color: black;
+      text-decoration: none;
+      cursor: pointer;
+    }
+
+    /* Style for the code textarea */
+    .codeblock {
+      width: 100%;
+      height: 100%;
+    }
+  </style>
+</head>
+
+<body>
+  <div class="container mx-auto py-8 px-8">
+    <h1 class="text-2xl mb-8 text-center">
+      Results
+    </h1>
+    <h2 class="text-lg mb-8 text-center mt-12">
+      <strong>
+        Summary
+      </strong>
+    </h2>
+    <table class="w-64 text-sm mt-8 mx-auto">
+      <tbody>
+        <tr class="bg-gray-50">
+          <td class="border-y px-2 py-2 font-bold">Requests:</td>
+          <td class="border-y px-2 py-2">
+            <%= results.length %>
+          </td>
+        </tr>
+        <tr class="bg-gray-50">
+          <td class="border-y px-2 py-2 font-bold">Success rate:</td>
+          <td class="border-y px-2 py-2">
+            <%= Math.round(100 * results.filter((r)=> r.score).length / results.length) %>%
+          </td>
+        </tr>
+        <tr class="bg-gray-50">
+          <td class="border-y px-2 py-2 font-bold">Average LOC:</td>
+          <td class="border-y px-2 py-2">
+            <%= Math.round(results.reduce((acc, r)=> acc + r.appDotJS.split("\n").length, 0) / results.length) %>
+          </td>
+      </tbody>
+    </table>
+    <h2 class="text-lg mb-8 text-center mt-12">
+      <strong>
+        Tasks
+      </strong>
+    </h2>
+    <table class="w-128 text-sm mt-8 mx-auto">
+      <thead>
+        <tr class="bg-gray-100">
+          <th class="border-y px-2 py-2 font-bold text-left">Task</th>
+          <th class="border-y px-2 py-2 font-bold text-left">Success</th>
+          <th class="border-y px-2 py-2 font-bold text-left">Name</th>
+        </tr>
+      </thead>
+      <tbody>
+        <% Object.keys(groups).sort().forEach(function(prompt, i) { 
+            const allResults = groups[prompt];
+            const successRate = Math.round(100 * allResults.filter((r) => r.score).length / allResults.length);
+        %>
+          <tr class="bg-gray-50">
+            <td class="border-y px-2 py-2"><%= i + 1 %></td>
+            <td class="border-y px-2 py-2"><%= successRate %>%</td>
+            <td class="border-y px-2 py-2">
+              <a href="#<%= prompt %>" class="underline">
+                <%= prompt %>
+              </a>
+            </td>
+          </tr>
+        <% }); %>
+      </tbody>
+    </table>
+    
+    <% Object.keys(groups).sort().forEach(function(prompt) { const allResults=groups[prompt]; %>
+      <h2 class="text-lg mb-8 text-center mt-12">
+        <strong>
+          <a name="<%= prompt %>">
+            <%= prompt %>
+          </a>
+        </strong><br />
+        <%= allResults.length %> Results
+      </h2>
+      <div class="flex flex-wrap justify-center w-full">
+        <% allResults.forEach(function(item) { %>
+          <div class="bg-white flex flex-col items-center justify-center m-1">
+            <% if (item.screenshot) { %>
+              <a href="./screenshots/<%= item.id %>.png" target="_blank" rel="noopener noreferrer">
+                <img src="./screenshots/<%= item.id %>.png" alt="<%= item.prompt %>"
+                  class="w-36 h-36 rounded-sm border">
+              </a>
+              <% } else { %>
+                <div class="w-36 h-36 rounded-sm border bg-gray-100 flex justify-center items-center">
+                  😵
+                </div>
+                <% } %>
+          </div>
+          <% }); %>
+      </div>
+      <table class="min-w-full text-sm mt-8">
+        <thead>
+          <tr>
+            <th class="text-left">ID</th>
+            <th class="text-left">Errors</th>
+            <th class="text-left">Exit Code</th>
+            <th class="text-left">LOC</th>
+            <th class="text-left">Chars/LOC</th>
+            <th class="text-left">Deps</th>
+            <th class="text-left">Score</th>
+          </tr>
+        </thead>
+        <tbody>
+          <% allResults.forEach(function(result) { %>
+            <tr class="bg-gray-50" data-index="<%= result.id %>">
+              <td class="border-y px-2 py-2">
+                <%= result.id.split("-")[0] %>
+              </td>
+              <td class="border-y px-2 py-2">
+                <% if (result.errors && result.errors.length) { %>
+                  <div class="px-2 py-1 inline-block rounded-sm bg-gray-200">
+                    <%- result.errors.join("<br />") %>
+                  </div>
+                  <% } %>
+                    <% if (result.exitCode !==0) { %>
+                      <div class="px-2 py-1 inline-block rounded-sm bg-gray-200">
+                        <%- result.log.match(/^\[STDERR\](.*)/mg)?.[0] %>
+                      </div>
+                      <% } %>
+              </td>
+              <td class="border-y px-2 py-2">
+                <div
+                  class="px-2 py-1 inline-block rounded-sm <%= result.exitCode === 0 ? 'bg-green-500 text-white' : 'bg-red-500 text-white' %>">
+                  <%= result.exitCode %>
+                </div>
+              </td>
+              <td class="border-y px-2 py-2">
+                <%= result.appDotJS.split("\n").length %>
+              </td>
+              <td class="border-y px-2 py-2">
+                <%= Math.round(result.appDotJS.length / result.appDotJS.split("\n").length) %>
+              </td>
+              <td class="border-y px-2 py-2">
+                <%= Object.keys(result.dependencies).length %>
+              </td>
+              <td class="border-y px-2 py-2">
+                <div
+                  class="px-2 py-1 inline-block rounded-sm <%= result.score ? 'bg-green-500 text-white' : 'bg-red-500 text-white' %>">
+                  <%= result.score ? "PASS" : "FAIL" %>
+                </div>
+              </td>
+            </tr>
+            <tr class="detail">
+              <td colspan="8">
+                <div style="display: flex;">
+                  <div class="appDotJS codeblock">
+                    <%= result.appDotJS %>
+                  </div>
+                  <div class="packageDotJSON codeblock">
+                    <%= result.packageDotJSON %>
+                  </div>
+                  <div class="log codeblock">
+                    <%= result.log %>
+                  </div>
+                </div>
+              </td>
+            </tr>
+            <% }); %>
+        </tbody>
+      </table>
+      <% }); %>
+  </div>
+
+  <!-- Modal Dialog -->
+  <div id="myModal" class="modal">
+    <div class="modal-content">
+      <span class="close">&times;</span>
+      <div class="modal-body">
+        <h3 class="text-md mt-4 font-bold">App.js</h3>
+        <div id="appDotJS" class="codeblock"></div>
+        <h3 class="text-md mt-4 font-bold">package.json</h3>
+        <div id="packageDotJSON" class="codeblock"></div>
+        <h3 class="text-md mt-4 font-bold">Log</h3>
+        <div id="log" class="codeblock"></div>
+      </div>
+    </div>
+  </div>
+
+  <script>
+    const rows = document.querySelectorAll('tbody tr[data-index]');
+    rows.forEach(row => {
+      row.addEventListener('click', () => {
+        const detailRow = row.nextElementSibling;
+        const appDotJS = document.getElementById('appDotJS');
+        appDotJS.innerText = detailRow.querySelector('.appDotJS.codeblock').textContent.replace(/^\s+|\s+$/, '');
+        const packageDotJSON = document.getElementById('packageDotJSON');
+        packageDotJSON.innerText = detailRow.querySelector('.packageDotJSON.codeblock').textContent.replace(/^\s+|\s+$/, '');
+        const log = document.getElementById('log');
+        log.innerText = detailRow.querySelector('.log.codeblock').textContent.replace(/^\s+|\s+$/, '');
+        modal.style.display = 'block';
+      });
+    });
+
+    // Get the modal element
+    const modal = document.getElementById('myModal');
+
+    // Get the <span> element that closes the modal
+    const closeModal = document.querySelector('.close');
+
+    // Close the modal when the close button is clicked
+    closeModal.addEventListener('click', () => {
+      modal.style.display = 'none';
+    });
+
+
+    document.addEventListener('keydown', (event) => {
+      if (event.key === 'Escape' || event.keyCode === 27) {
+        modal.style.display = 'none';
+      }
+    });
+
+    // Close the modal when clicking outside of it
+    window.addEventListener('click', event => {
+      if (event.target === modal) {
+        modal.style.display = 'none';
+      }
+    });
+  </script>
+</body>
+
+</html>
