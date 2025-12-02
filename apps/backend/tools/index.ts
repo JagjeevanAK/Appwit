@@ -95,7 +95,25 @@ export function createSandboxTools(sandbox: Sandbox) {
         }
     );
 
-    return [createFileTool, updateFileTool, deleteFileTool, readFileTool, listFilesTool];
+    const runCommandTool = tool(
+        async ({ command }) => {
+            try {
+                const result = await sandbox.commands.run(command);
+                return `Exit code: ${result.exitCode}\nStdout: ${result.stdout}\nStderr: ${result.stderr}`;
+            } catch (error) {
+                return `Error running command: ${error}`;
+            }
+        },
+        {
+            name: "runCommand",
+            description: "Run a terminal command in the sandbox environment",
+            schema: z.object({
+                command: z.string().describe('The command to run in the terminal'),
+            }),
+        }
+    );
+
+    return [createFileTool, updateFileTool, deleteFileTool, readFileTool, listFilesTool, runCommandTool];
 }
 
 export const toolDefinitions = {
@@ -118,6 +136,10 @@ export const toolDefinitions = {
     listFiles: {
         name: "listFiles",
         description: "List all files in a directory to see what exists",
+    },
+    runCommand: {
+        name: "runCommand",
+        description: "Run a terminal command in the sandbox environment",
     },
 };
 
