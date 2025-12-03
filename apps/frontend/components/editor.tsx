@@ -38,7 +38,6 @@ export default function CodeEditor({ streamState }: CodeEditorProps) {
   const [hasInitialLoad, setHasInitialLoad] = useState(false);
   const processedChangesRef = useRef<number>(0);
 
-  // Helper to find first file in tree
   const findFirstFile = useCallback((nodes: FileNode[]): FileNode | null => {
     for (const node of nodes) {
       if (node.kind === 'file') return node;
@@ -56,7 +55,6 @@ export default function CodeEditor({ streamState }: CodeEditorProps) {
       return;
     }
     
-    // Only show loading spinner on initial load, not during refetches
     if (!isRefetch) {
       setIsLoadingFiles(true);
     }
@@ -69,7 +67,6 @@ export default function CodeEditor({ streamState }: CodeEditorProps) {
       
       if (fileTree && fileTree.length > 0) {
         setFiles(prevFiles => {
-          // On refetch, merge to preserve content
           if (isRefetch && prevFiles.length > 0) {
             return mergeFileTrees(prevFiles, fileTree);
           }
@@ -77,7 +74,6 @@ export default function CodeEditor({ streamState }: CodeEditorProps) {
         });
         console.log('Files set, count:', fileTree.length);
         
-        // Only reset tabs on initial load, not on refetch
         if (!isRefetch && !hasInitialLoad) {
           const firstFile = findFirstFile(fileTree);
           if (firstFile) {

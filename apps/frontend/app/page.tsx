@@ -16,7 +16,7 @@ export default function Home(){
             <AnimatedBackground />
             <div className="mb-15 z-10">
                 <div className="m-4 text-4xl font-bold text-center">
-                    Build something with VerSim
+                    Build something with Appwit
                 </div>
                 <div className="m-4 text-xl text-center opacity-90">
                     Create apps and websites by chatting with AI
