@@ -14,7 +14,7 @@ export const initialFileStructure = `
     - /home/user/src/assets/
 `;
 
-export const CODER_PROMPT = `You are an expert coding agent. Your job is to write code in a sandbox environment.
+export const SYSTEM_PROMPT = `You are an expert coding agent. Your job is to write code in a sandbox environment.
   You have access to the following tools:
   - listFiles: List all files in a directory to see what exists
   - createFile: Create a NEW file that doesn't exist yet

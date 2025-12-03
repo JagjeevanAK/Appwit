@@ -9,11 +9,14 @@ import ChatBar from "@/components/Chatbar"
 import CodeEditor from "@/components/editor"
 import { useStream } from "@/hooks/useStream"
 import { useSearchParams } from "next/navigation"
+import { useSandboxHeartbeat } from "@/hooks/useSandboxHeartbeat"
 
 export default function Home() {
   const streamState = useStream();
   const searchParams = useSearchParams();
   const initialPrompt = searchParams.get("prompt");
+
+  useSandboxHeartbeat(streamState.sandboxId);
 
   return (
     <div className="h-screen w-screen bg-[#1D1D1D] flex items-center justify-center">

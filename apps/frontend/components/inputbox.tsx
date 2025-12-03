@@ -1,5 +1,5 @@
 "use client"
-import { ArrowRight } from 'lucide-react';
+import { ArrowUp } from 'lucide-react';
 import { cn } from "@/lib/utils"
 import { useRef, useState, useEffect } from 'react';
 
@@ -13,11 +13,11 @@ interface InputBoxProps {
     placeholders?: string[];
 }
 
-export default function InputBox({ 
-    width, 
-    height, 
-    maxHeight = "max-h-[200px]", 
-    style, 
+export default function InputBox({
+    width,
+    height,
+    maxHeight = "max-h-[200px]",
+    style,
     onSendMessage,
     animatedPlaceholder = false,
     placeholders = [
@@ -30,7 +30,7 @@ export default function InputBox({
         "Build a portfolio...",
         "Build a CRM system..."
     ]
-}: InputBoxProps){
+}: InputBoxProps) {
     const textareaRef = useRef<HTMLTextAreaElement>(null);
     const [input, setInput] = useState<string>("");
     const [currentPlaceholder, setCurrentPlaceholder] = useState<string>(animatedPlaceholder ? "" : "Type your message...");
@@ -44,7 +44,7 @@ export default function InputBox({
         }
 
         const currentText = placeholders[placeholderIndex];
-        
+
         if (!isDeleting && charIndex < currentText.length) {
             const timeout = setTimeout(() => {
                 setCurrentPlaceholder(currentText.slice(0, charIndex + 1));
@@ -91,12 +91,14 @@ export default function InputBox({
     };
 
     return (
-        <div 
-            className={cn("bg-[#282825] rounded-3xl p-4")}
-            style={{ 
+        <div
+            className={cn(
+                "relative flex flex-col w-full p-3 overflow-hidden border rounded-xl bg-background focus-within:ring-1 focus-within:ring-ring border-input shadow-sm transition-all duration-200"
+            )}
+            style={{
                 width: width,
                 height: height,
-                maxHeight: maxHeight?.startsWith('max-h-') ? undefined : maxHeight 
+                maxHeight: maxHeight?.startsWith('max-h-') ? undefined : maxHeight
             }}
         >
             <textarea
@@ -104,7 +106,11 @@ export default function InputBox({
                 autoFocus
                 onInput={handleInput}
                 onChange={(e) => setInput(e.target.value)}
-                className={cn("w-full bg-transparent text-white outline-none pl-1 min-h-10 resize-none overflow-y-auto placeholder:text-muted-foreground selection:bg-primary/20 selection:text-primary caret-white text-lg", style, maxHeight?.startsWith('max-h-') ? maxHeight : undefined)}
+                className={cn(
+                    "w-full resize-none bg-transparent px-2 py-2 text-base outline-none placeholder:text-muted-foreground min-h-[60px]",
+                    style,
+                    maxHeight?.startsWith('max-h-') ? maxHeight : undefined
+                )}
                 placeholder={currentPlaceholder}
                 value={input}
                 onKeyDown={(e) => {
@@ -114,12 +120,18 @@ export default function InputBox({
                     }
                 }}
             />
-            <div className='flex flex-row-reverse mt-2'>
-                <button 
-                    className="ml-3 bg-white px-2 py-2 rounded-full transition-all cursor-pointer"
+            <div className="flex justify-end mt-2">
+                <button
+                    className={cn(
+                        "inline-flex items-center justify-center rounded-lg p-2 transition-colors",
+                        input.trim()
+                            ? "bg-primary text-primary-foreground hover:bg-primary/90"
+                            : "bg-muted text-muted-foreground cursor-not-allowed"
+                    )}
                     onClick={handleSend}
+                    disabled={!input.trim()}
                 >
-                    <ArrowRight className="text-black" />
+                    <ArrowUp className="h-4 w-4" />
                 </button>
             </div>
         </div>

@@ -58,7 +58,15 @@ export function AuthProvider({ children }: { children: ReactNode }) {
             localStorage.setItem('user', JSON.stringify(data.user))
             setToken(data.token)
             setUser(data.user)
-            router.push('/')
+
+            // Check for pending prompt
+            const pendingPrompt = localStorage.getItem('pendingPrompt')
+            if (pendingPrompt) {
+                localStorage.removeItem('pendingPrompt')
+                router.push(`/projects?prompt=${encodeURIComponent(pendingPrompt)}`)
+            } else {
+                router.push('/')
+            }
         } finally {
             setLoading(false)
         }
@@ -83,7 +91,15 @@ export function AuthProvider({ children }: { children: ReactNode }) {
             localStorage.setItem('user', JSON.stringify(data.user))
             setToken(data.token)
             setUser(data.user)
-            router.push('/')
+
+            // Check for pending prompt
+            const pendingPrompt = localStorage.getItem('pendingPrompt')
+            if (pendingPrompt) {
+                localStorage.removeItem('pendingPrompt')
+                router.push(`/projects?prompt=${encodeURIComponent(pendingPrompt)}`)
+            } else {
+                router.push('/')
+            }
         } finally {
             setLoading(false)
         }

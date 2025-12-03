@@ -29,23 +29,25 @@ router.post("/", async (req: Request, res: Response) => {
         if (!TEMPLATE_ID || !SANDBOX_PORT) {
             return res.status(500).json({ error: 'TEMPLATE_ID or SANDBOX_PORT environment variable is not set' });
         }
-        
-        const sandbox = await Sandbox.create(TEMPLATE_ID);
-        
+
+        const sandbox = await Sandbox.create(TEMPLATE_ID, {
+            timeoutMs: 300_000
+        });
+
         const host = sandbox.getHost(parseInt(SANDBOX_PORT));
         const sandboxUrl = `https://${host}`;
         const sandboxId = sandbox.sandboxId;
-        
+
         const graph = createAgentGraph(sandbox);
         const initialMessages: BaseMessage[] = [new SystemMessage(SYSTEM_PROMPT)];
-        
+
         activeSandboxes.set(sandboxId, {
             sandbox,
             graph,
             messages: initialMessages,
             sandboxUrl
         });
-        
+
         console.log(`Sandbox created: ${sandboxUrl}, ID: ${sandboxId}`);
 
         res.setHeader('Content-Type', 'text/event-stream');
@@ -60,7 +62,7 @@ router.post("/", async (req: Request, res: Response) => {
             try {
                 for await (const event of streamMultiAgentOrchestrator(sandbox, prompt)) {
                     res.write(`data: ${JSON.stringify(event)}\n\n`);
-                    
+
                     if (event.type === 'plan' && event.plan) {
                         session.plan = event.plan;
                     }
@@ -85,26 +87,26 @@ router.post("/", async (req: Request, res: Response) => {
 
                 for await (const event of stream) {
                     const [message, metadata] = event;
-                    
+
                     if (AIMessage.isInstance(message)) {
                         if (message.content && typeof message.content === 'string') {
                             res.write(`data: ${JSON.stringify({ type: 'text', content: message.content })}\n\n`);
                         }
-                        
+
                         if (message.tool_calls && message.tool_calls.length > 0) {
                             for (const toolCall of message.tool_calls) {
-                                res.write(`data: ${JSON.stringify({ 
-                                    type: 'tool_call', 
-                                    name: toolCall.name, 
-                                    args: toolCall.args 
+                                res.write(`data: ${JSON.stringify({
+                                    type: 'tool_call',
+                                    name: toolCall.name,
+                                    args: toolCall.args
                                 })}\n\n`);
                             }
                         }
                     }
-                    
+
                     if (ToolMessage.isInstance(message)) {
-                        res.write(`data: ${JSON.stringify({ 
-                            type: 'tool_result', 
+                        res.write(`data: ${JSON.stringify({
+                            type: 'tool_result',
                             name: message.name,
                             content: typeof message.content === 'string' ? message.content : JSON.stringify(message.content)
                         })}\n\n`);
@@ -140,7 +142,7 @@ router.post("/continue", async (req: Request, res: Response) => {
     }
 
     const session = activeSandboxes.get(sandboxId);
-    
+
     if (!session) {
         return res.status(404).json({ error: 'Sandbox session not found or expired' });
     }
@@ -165,26 +167,26 @@ router.post("/continue", async (req: Request, res: Response) => {
 
             for await (const event of stream) {
                 const [message, metadata] = event;
-                
+
                 if (AIMessage.isInstance(message)) {
                     if (message.content && typeof message.content === 'string') {
                         res.write(`data: ${JSON.stringify({ type: 'text', content: message.content })}\n\n`);
                     }
-                    
+
                     if (message.tool_calls && message.tool_calls.length > 0) {
                         for (const toolCall of message.tool_calls) {
-                            res.write(`data: ${JSON.stringify({ 
-                                type: 'tool_call', 
-                                name: toolCall.name, 
-                                args: toolCall.args 
+                            res.write(`data: ${JSON.stringify({
+                                type: 'tool_call',
+                                name: toolCall.name,
+                                args: toolCall.args
                             })}\n\n`);
                         }
                     }
                 }
-                
+
                 if (ToolMessage.isInstance(message)) {
-                    res.write(`data: ${JSON.stringify({ 
-                        type: 'tool_result', 
+                    res.write(`data: ${JSON.stringify({
+                        type: 'tool_result',
                         name: message.name,
                         content: typeof message.content === 'string' ? message.content : JSON.stringify(message.content)
                     })}\n\n`);
@@ -219,26 +221,26 @@ router.get("/history/:sandboxId", async (req: Request, res: Response) => {
     }
 
     const session = activeSandboxes.get(sandboxId);
-    
+
     if (!session) {
         return res.status(404).json({ error: 'Sandbox session not found' });
     }
 
     const formattedMessages = session.messages.map(msg => {
-        const type = AIMessage.isInstance(msg) ? 'ai' 
+        const type = AIMessage.isInstance(msg) ? 'ai'
             : HumanMessage.isInstance(msg) ? 'human'
-            : ToolMessage.isInstance(msg) ? 'tool'
-            : SystemMessage.isInstance(msg) ? 'system'
-            : 'unknown';
-        
+                : ToolMessage.isInstance(msg) ? 'tool'
+                    : SystemMessage.isInstance(msg) ? 'system'
+                        : 'unknown';
+
         return {
             type,
             content: typeof msg.content === 'string' ? msg.content : JSON.stringify(msg.content),
-            ...(AIMessage.isInstance(msg) && msg.tool_calls 
-                ? { toolCalls: msg.tool_calls } 
+            ...(AIMessage.isInstance(msg) && msg.tool_calls
+                ? { toolCalls: msg.tool_calls }
                 : {}),
-            ...(ToolMessage.isInstance(msg) 
-                ? { name: msg.name } 
+            ...(ToolMessage.isInstance(msg)
+                ? { name: msg.name }
                 : {})
         };
     });
@@ -251,6 +253,28 @@ router.get("/history/:sandboxId", async (req: Request, res: Response) => {
     });
 });
 
+router.post("/refresh/:sandboxId", async (req: Request, res: Response) => {
+    const sandboxId = req.params.sandboxId;
+
+    if (!sandboxId) {
+        return res.status(400).json({ error: 'sandboxId is required' });
+    }
+
+    const session = activeSandboxes.get(sandboxId);
+
+    if (!session) {
+        return res.status(404).json({ error: 'Sandbox session not found' });
+    }
+
+    try {
+        await session.sandbox.setTimeout(200_000);
+        res.json({ success: true, message: 'Sandbox timeout refreshed' });
+    } catch (error) {
+        console.error('Error refreshing sandbox timeout:', error);
+        res.status(500).json({ error: 'Failed to refresh sandbox timeout' });
+    }
+});
+
 router.delete("/:sandboxId", async (req: Request, res: Response) => {
     const sandboxId = req.params.sandboxId;
 
@@ -259,7 +283,7 @@ router.delete("/:sandboxId", async (req: Request, res: Response) => {
     }
 
     const session = activeSandboxes.get(sandboxId);
-    
+
     if (!session) {
         return res.status(404).json({ error: 'Sandbox session not found' });
     }
