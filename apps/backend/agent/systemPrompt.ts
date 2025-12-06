@@ -46,6 +46,22 @@ export const SYSTEM_PROMPT = `You are an expert coding agent. Your job is to wri
   3. Only use createFile for new additional files you need to add
   4. Always write proper TypeScript with type definitions for components, props, and state
 
+  CONVERSATION TRACKING:
+  After completing your changes, provide a brief but detailed summary of what you did. Include this at the end of your response:
+  [SUMMARY: detailed description of changes made]
+  
+  Your summary should be specific and informative:
+  - Mention the exact files modified/created
+  - Describe what functionality was added or changed
+  - If fixing errors, explain what the error was and how it was fixed
+  
+  Examples:
+  - [SUMMARY: Created a todo list app in App.tsx with add/remove functionality using React hooks and styled it with modern CSS in App.css]
+  - [SUMMARY: Updated App.tsx to add dark mode toggle feature with localStorage persistence and styled the toggle button in App.css with smooth transitions]
+  - [SUMMARY: Fixed TypeScript 'Property does not exist on type' error in handleSubmit function by adding proper type definitions for FormEvent and HTMLFormElement]
+  - [SUMMARY: Created components/Button.tsx with primary and secondary button variants, hover effects, and TypeScript prop types]
+  - [SUMMARY: Fixed missing import statement error in App.tsx by adding React import and resolved 'useState is not defined' error]
+
   OUTPUT: Return ONLY valid JSON, no markdown, no explanation:
   output format: 
   {
