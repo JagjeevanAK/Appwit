@@ -4,10 +4,11 @@ import { Sandbox } from "e2b";
 import { HumanMessage, AIMessage, ToolMessage, SystemMessage, BaseMessage } from "@langchain/core/messages";
 import { createAgentGraph, type AgentGraph } from "../agent/graph";
 import { streamMultiAgentOrchestrator, type WorkerEvent } from "../agent/orchestrator";
-import { SYSTEM_PROMPT } from "../agent/systemPrompt";
+import { SYSTEM_PROMPT, INITIAL_SYSTEM_PROMPT, CONTEXT_SYSTEM_PROMPT } from "../agent/systemPrompt";
 import type { Plan } from "../agent/types";
 import { prisma } from "../lib/prisma";
 import { MessageRole } from "../generated/prisma/client";
+import type { AuthRequest } from "../middleware/auth";
 
 const router = Router();
 
@@ -55,7 +56,6 @@ async function getOrCreateChat(projectId: string): Promise<string> {
     return chat.id;
 }
 
-// Helper function to save message to database
 async function saveMessage(chatId: string, role: MessageRole, content: string, summary?: string | null) {
     await prisma.message.create({
         data: {
@@ -67,10 +67,64 @@ async function saveMessage(chatId: string, role: MessageRole, content: string, s
     });
 }
 
-router.post("/", async (req: Request, res: Response) => {
+async function isFirstMessage(chatId: string): Promise<boolean> {
+    const count = await prisma.message.count({
+        where: { chatId }
+    });
+    return count === 0;
+}
+
+async function getChatHistory(chatId: string, limit: number = 10): Promise<BaseMessage[]> {
+    const messages = await prisma.message.findMany({
+        where: { chatId },
+        orderBy: { createdAt: 'desc' },
+        take: limit,
+        select: {
+            role: true,
+            content: true
+        }
+    });
+
+    // Reverse to get chronological order and convert to LangChain messages
+    return messages.reverse().map(msg => {
+        if (msg.role === MessageRole.USER) {
+            return new HumanMessage(msg.content);
+        } else if (msg.role === MessageRole.ASSISTANT) {
+            return new AIMessage(msg.content);
+        } else {
+            return new SystemMessage(msg.content);
+        }
+    });
+}
+
+router.post("/", async (req: AuthRequest, res: Response) => {
     const { prompt, projectId, useMultiAgent = true } = req.body;
+    const userId = req.userId;
+
+    // Validate required fields
+    if (!projectId) {
+        return res.status(400).json({ error: 'projectId is required' });
+    }
+
+    if (!userId) {
+        return res.status(401).json({ error: 'Unauthorized' });
+    }
 
     try {
+        // Verify project exists and belongs to user
+        const project = await prisma.project.findUnique({
+            where: { id: projectId },
+            select: { userId: true }
+        });
+
+        if (!project) {
+            return res.status(404).json({ error: 'Project not found' });
+        }
+
+        if (project.userId !== userId) {
+            return res.status(403).json({ error: 'Forbidden' });
+        }
+
         if (!TEMPLATE_ID || !SANDBOX_PORT) {
             return res.status(500).json({ error: 'TEMPLATE_ID or SANDBOX_PORT environment variable is not set' });
         }
@@ -83,16 +137,34 @@ router.post("/", async (req: Request, res: Response) => {
         const sandboxUrl = `https://${host}`;
         const sandboxId = sandbox.sandboxId;
 
-        const graph = createAgentGraph(sandbox);
-        const initialMessages: BaseMessage[] = [new SystemMessage(SYSTEM_PROMPT)];
+        const chatId = await getOrCreateChat(projectId);
 
-        // Get or create chat for this project if projectId is provided
-        let chatId: string | undefined;
-        if (projectId) {
-            chatId = await getOrCreateChat(projectId);
-            // Save user message to database
-            await saveMessage(chatId, MessageRole.USER, prompt);
+        const isFirst = await isFirstMessage(chatId);
+
+        await saveMessage(chatId, MessageRole.USER, prompt);
+
+        // Build context messages based on whether this is first or subsequent prompt
+        let initialMessages: BaseMessage[];
+
+        if (isFirst) {
+            // Phase 1: Initial creation - full system prompt, no history
+            console.log(`[Phase 1] Initial project creation for chat ${chatId}`);
+            initialMessages = [new SystemMessage(INITIAL_SYSTEM_PROMPT)];
+        } else {
+            // Phase 2: Iterative changes - simplified prompt + last 10 messages
+            console.log(`[Phase 2] Iterative changes for chat ${chatId}, fetching history`);
+            const history = await getChatHistory(chatId, 11); // Get 11 to exclude the current message
+            // Remove the last message (the one we just saved)
+            history.pop();
+
+            initialMessages = [
+                new SystemMessage(CONTEXT_SYSTEM_PROMPT),
+                ...history.slice(-10) // Last 10 messages (or all if < 10)
+            ];
+            console.log(`Including ${initialMessages.length - 1} previous messages as context`);
         }
+
+        const graph = createAgentGraph(sandbox);
 
         activeSandboxes.set(sandboxId, {
             sandbox,
@@ -196,7 +268,7 @@ router.post("/", async (req: Request, res: Response) => {
     }
 });
 
-router.post("/continue", async (req: Request, res: Response) => {
+router.post("/continue", async (req: AuthRequest, res: Response) => {
     const { prompt, sandboxId } = req.body;
 
     if (!sandboxId) {
@@ -213,6 +285,24 @@ router.post("/continue", async (req: Request, res: Response) => {
         // Save user message to database if chatId exists
         if (session.chatId) {
             await saveMessage(session.chatId, MessageRole.USER, prompt);
+
+            // Get history for context (last 10 messages excluding the one we just saved)
+            const history = await getChatHistory(session.chatId, 11);
+            // Remove the last message (the one we just saved)
+            history.pop();
+
+            // Build context with history for iterative changes
+            session.messages = [
+                new SystemMessage(CONTEXT_SYSTEM_PROMPT),
+                ...history.slice(-10), // Last 10 messages (or all if < 10)
+                new HumanMessage(prompt)
+            ];
+
+            console.log(`[Continue] Including ${history.slice(-10).length} previous messages as context`);
+        } else {
+            // Fallback if no chatId (shouldn't normally happen)
+            const userMessage = new HumanMessage(prompt);
+            session.messages.push(userMessage);
         }
 
         res.setHeader('Content-Type', 'text/event-stream');
@@ -222,9 +312,6 @@ router.post("/continue", async (req: Request, res: Response) => {
         res.setHeader('X-Sandbox-ID', sandboxId);
 
         console.log(`Continuing conversation in sandbox ${sandboxId}, current messages: ${session.messages.length}`);
-
-        const userMessage = new HumanMessage(prompt);
-        session.messages.push(userMessage);
 
         let accumulatedResponse = '';
 
