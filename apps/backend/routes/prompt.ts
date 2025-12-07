@@ -2,8 +2,7 @@ import { Router } from "express";
 import type { Request, Response } from "express";
 import { Sandbox } from "e2b";
 import { HumanMessage, AIMessage, ToolMessage, SystemMessage, BaseMessage } from "@langchain/core/messages";
-import { createAgentGraph, type AgentGraph } from "../agent/graph";
-import { streamMultiAgentOrchestrator } from "../agent/orchestrator";
+import { streamMultiAgentOrchestrator, type StreamEvent } from "../agent/orchestrator";
 import { INITIAL_SYSTEM_PROMPT, CONTEXT_SYSTEM_PROMPT } from "../agent/systemPrompt";
 import type { Plan } from "../agent/types";
 import { prisma } from "../lib/prisma";
@@ -18,7 +17,6 @@ const SANDBOX_PORT = process.env.SANDBOX_PORT;
 
 interface SandboxSession {
     sandbox: Sandbox;
-    graph: AgentGraph;
     messages: BaseMessage[];
     sandboxUrl: string;
     plan?: Plan;
@@ -37,7 +35,7 @@ interface PendingShutdown {
 }
 
 const pendingShutdowns = new Map<string, PendingShutdown>();
-const SHUTDOWN_DELAY_MS = 2 * 60 * 1000;
+const SHUTDOWN_DELAY_MS = 1 * 60 * 1000;
 
 function extractSummary(content: string): { cleanContent: string; summary: string | null } {
     const summaryMatch = content.match(/\[SUMMARY:\s*(.+?)\]/i);
@@ -262,11 +260,8 @@ router.post("/", async (req: AuthRequest, res: Response) => {
             console.log(`Including ${initialMessages.length - 1} previous messages as context`);
         }
 
-        const graph = createAgentGraph(sandbox);
-
         activeSandboxes.set(sandboxId, {
             sandbox,
-            graph,
             messages: initialMessages,
             sandboxUrl,
             projectId,
@@ -284,83 +279,27 @@ router.post("/", async (req: AuthRequest, res: Response) => {
 
         const session = activeSandboxes.get(sandboxId)!;
 
-        if (useMultiAgent) {
-            try {
-                // Use INITIAL prompt for first message, CONTEXT prompt for subsequent
-                const systemPromptToUse = isFirst ? INITIAL_SYSTEM_PROMPT : CONTEXT_SYSTEM_PROMPT;
-                console.log(`Using ${isFirst ? 'INITIAL' : 'CONTEXT'} system prompt for orchestrator`);
+        try {
+            // Use INITIAL prompt for first message, CONTEXT prompt for subsequent
+            const systemPromptToUse = isFirst ? INITIAL_SYSTEM_PROMPT : CONTEXT_SYSTEM_PROMPT;
+            console.log(`Using ${isFirst ? 'INITIAL' : 'CONTEXT'} system prompt for orchestrator`);
 
-                for await (const event of streamMultiAgentOrchestrator(sandbox, prompt, systemPromptToUse)) {
-                    res.write(`data: ${JSON.stringify(event)}\n\n`);
-
-                    if (event.type === 'plan' && event.plan) {
-                        session.plan = event.plan;
-                    }
-                }
-
-                // Save assistant response to database
-                // For multi-agent orchestrator, we save a generic completion message
-                if (session.chatId) {
-                    const summary = "Code generation completed successfully";
-                    await saveMessage(session.chatId, MessageRole.ASSISTANT, summary, summary);
-                }
-
-                res.write(`data: ${JSON.stringify({ type: 'done', sandboxUrl, sandboxId })}\n\n`);
-                res.end();
-            } catch (orchestratorError) {
-                console.error('Error during multi-agent orchestration:', orchestratorError);
-                res.write(`data: ${JSON.stringify({ type: 'error', message: 'Orchestration error occurred' })}\n\n`);
-                res.end();
+            for await (const event of streamMultiAgentOrchestrator(sandbox, prompt, systemPromptToUse)) {
+                res.write(`data: ${JSON.stringify(event)}\n\n`);
             }
-        } else {
-            const userMessage = new HumanMessage(prompt);
-            session.messages.push(userMessage);
 
-            try {
-                const stream = await graph.stream(
-                    { messages: session.messages },
-                    { streamMode: "messages" }
-                );
-
-                for await (const event of stream) {
-                    const [message, metadata] = event;
-
-                    if (AIMessage.isInstance(message)) {
-                        if (message.content && typeof message.content === 'string') {
-                            res.write(`data: ${JSON.stringify({ type: 'text', content: message.content })}\n\n`);
-                        }
-
-                        if (message.tool_calls && message.tool_calls.length > 0) {
-                            for (const toolCall of message.tool_calls) {
-                                res.write(`data: ${JSON.stringify({
-                                    type: 'tool_call',
-                                    name: toolCall.name,
-                                    args: toolCall.args
-                                })}\n\n`);
-                            }
-                        }
-                    }
-
-                    if (ToolMessage.isInstance(message)) {
-                        res.write(`data: ${JSON.stringify({
-                            type: 'tool_result',
-                            name: message.name,
-                            content: typeof message.content === 'string' ? message.content : JSON.stringify(message.content)
-                        })}\n\n`);
-                    }
-                }
-
-                const finalResult = await graph.invoke({ messages: session.messages });
-                session.messages = finalResult.messages;
-
-                res.write(`data: ${JSON.stringify({ type: 'done', sandboxUrl, sandboxId })}\n\n`);
-                res.end();
-
-            } catch (streamError) {
-                console.error('Error during streaming:', streamError);
-                res.write(`data: ${JSON.stringify({ type: 'error', message: 'Stream error occurred' })}\n\n`);
-                res.end();
+            // Save assistant response to database
+            if (session.chatId) {
+                const summary = "Code generation completed successfully";
+                await saveMessage(session.chatId, MessageRole.ASSISTANT, summary, summary);
             }
+
+            res.write(`data: ${JSON.stringify({ type: 'done', sandboxUrl, sandboxId })}\n\n`);
+            res.end();
+        } catch (orchestratorError) {
+            console.error('Error during orchestration:', orchestratorError);
+            res.write(`data: ${JSON.stringify({ type: 'error', message: 'Orchestration error occurred' })}\n\n`);
+            res.end();
         }
 
     } catch (error) {
@@ -388,24 +327,6 @@ router.post("/continue", async (req: AuthRequest, res: Response) => {
         // Save user message to database if chatId exists
         if (session.chatId) {
             await saveMessage(session.chatId, MessageRole.USER, prompt);
-
-            // Get history for context (last 10 messages excluding the one we just saved)
-            const history = await getChatHistory(session.chatId, 11);
-            // Remove the last message (the one we just saved)
-            history.pop();
-
-            // Build context with history for iterative changes
-            session.messages = [
-                new SystemMessage(CONTEXT_SYSTEM_PROMPT),
-                ...history.slice(-10), // Last 10 messages (or all if < 10)
-                new HumanMessage(prompt)
-            ];
-
-            console.log(`[Continue] Including ${history.slice(-10).length} previous messages as context`);
-        } else {
-            // Fallback if no chatId (shouldn't normally happen)
-            const userMessage = new HumanMessage(prompt);
-            session.messages.push(userMessage);
         }
 
         res.setHeader('Content-Type', 'text/event-stream');
@@ -414,60 +335,26 @@ router.post("/continue", async (req: AuthRequest, res: Response) => {
         res.setHeader('X-Sandbox-URL', session.sandboxUrl);
         res.setHeader('X-Sandbox-ID', sandboxId);
 
-        console.log(`Continuing conversation in sandbox ${sandboxId}, current messages: ${session.messages.length}`);
-
-        let accumulatedResponse = '';
+        console.log(`[Continue] Continuing conversation in sandbox ${sandboxId}`);
 
         try {
-            const stream = await session.graph.stream(
-                { messages: session.messages },
-                { streamMode: "messages" }
-            );
-
-            for await (const event of stream) {
-                const [message, metadata] = event;
-
-                if (AIMessage.isInstance(message)) {
-                    if (message.content && typeof message.content === 'string') {
-                        accumulatedResponse += message.content;
-                        res.write(`data: ${JSON.stringify({ type: 'text', content: message.content })}\n\n`);
-                    }
-
-                    if (message.tool_calls && message.tool_calls.length > 0) {
-                        for (const toolCall of message.tool_calls) {
-                            res.write(`data: ${JSON.stringify({
-                                type: 'tool_call',
-                                name: toolCall.name,
-                                args: toolCall.args
-                            })}\n\n`);
-                        }
-                    }
-                }
-
-                if (ToolMessage.isInstance(message)) {
-                    res.write(`data: ${JSON.stringify({
-                        type: 'tool_result',
-                        name: message.name,
-                        content: typeof message.content === 'string' ? message.content : JSON.stringify(message.content)
-                    })}\n\n`);
-                }
+            // Use CONTEXT_SYSTEM_PROMPT for iterative changes
+            for await (const event of streamMultiAgentOrchestrator(session.sandbox, prompt, CONTEXT_SYSTEM_PROMPT)) {
+                res.write(`data: ${JSON.stringify(event)}\n\n`);
             }
 
-            const finalResult = await session.graph.invoke({ messages: session.messages });
-            session.messages = finalResult.messages;
-
-            // Save assistant response to database with extracted summary
-            if (session.chatId && accumulatedResponse) {
-                const { cleanContent, summary } = extractSummary(accumulatedResponse);
-                await saveMessage(session.chatId, MessageRole.ASSISTANT, cleanContent, summary);
+            // Save assistant response to database
+            if (session.chatId) {
+                const summary = "Code changes completed successfully";
+                await saveMessage(session.chatId, MessageRole.ASSISTANT, summary, summary);
             }
 
             res.write(`data: ${JSON.stringify({ type: 'done', sandboxUrl: session.sandboxUrl, sandboxId })}\n\n`);
             res.end();
 
         } catch (streamError) {
-            console.error('Error during streaming:', streamError);
-            res.write(`data: ${JSON.stringify({ type: 'error', message: 'Stream error occurred' })}\n\n`);
+            console.error('Error during orchestration:', streamError);
+            res.write(`data: ${JSON.stringify({ type: 'error', message: 'Orchestration error occurred' })}\n\n`);
             res.end();
         }
 
@@ -519,6 +406,87 @@ router.get("/history/:sandboxId", async (req: Request, res: Response) => {
     });
 });
 
+router.post("/load/:projectId", async (req: AuthRequest, res: Response) => {
+    const projectId = req.params.projectId;
+    const userId = req.userId;
+
+    if (!projectId) {
+        return res.status(400).json({ error: 'projectId is required' });
+    }
+
+    if (!userId) {
+        return res.status(401).json({ error: 'Unauthorized' });
+    }
+
+    try {
+        const project = await prisma.project.findFirst({
+            where: { id: projectId, userId }
+        });
+
+        if (!project) {
+            return res.status(404).json({ error: 'Project not found' });
+        }
+
+        // Check if there's already an active sandbox for this project
+        for (const [sandboxId, session] of activeSandboxes) {
+            if (session.projectId === projectId) {
+                console.log(`[LOAD] Found existing sandbox ${sandboxId} for project ${projectId}`);
+                // Cancel any pending shutdown
+                cancelPendingShutdown(sandboxId);
+                return res.json({
+                    sandboxId,
+                    sandboxUrl: session.sandboxUrl,
+                    restored: false,
+                    message: 'Using existing sandbox'
+                });
+            }
+        }
+
+        console.log(`[LOAD] Creating new sandbox for project ${projectId}`);
+        const sandbox = await Sandbox.create(TEMPLATE_ID!, {
+            timeoutMs: 300_000
+        });
+
+        const host = sandbox.getHost(parseInt(SANDBOX_PORT!));
+        const sandboxUrl = `https://${host}`;
+        const sandboxId = sandbox.sandboxId;
+
+        let restored = false;
+        if (isR2Configured() && project.r2BackupPath) {
+            console.log(`[LOAD] Restoring project ${projectId} from R2`);
+            restored = await performFullRestore(sandbox, userId, projectId);
+            if (restored) {
+                console.log(`[LOAD] Project ${projectId} restored from R2 backup`);
+            } else {
+                console.log(`[LOAD] No backup found for project ${projectId}`);
+            }
+        }
+
+        const chatId = await getOrCreateChat(projectId);
+
+        activeSandboxes.set(sandboxId, {
+            sandbox,
+            messages: [],
+            sandboxUrl,
+            projectId,
+            chatId,
+            userId
+        });
+
+        console.log(`[LOAD] Sandbox ${sandboxId} ready for project ${projectId}`);
+
+        res.json({
+            sandboxId,
+            sandboxUrl,
+            restored,
+            message: restored ? 'Project restored from backup' : 'New sandbox created'
+        });
+    } catch (error) {
+        console.error('[LOAD] Error loading project:', error);
+        res.status(500).json({ error: 'Failed to load project' });
+    }
+});
+
 router.post("/refresh/:sandboxId", async (req: Request, res: Response) => {
     const sandboxId = req.params.sandboxId;
 
@@ -554,14 +522,19 @@ router.post("/notify-leaving/:sandboxId", async (req: Request, res: Response) =>
         return res.status(400).json({ error: 'sandboxId is required' });
     }
 
+    console.log(`[NOTIFY-LEAVING] Received for sandbox ${sandboxId}`);
+
     const session = activeSandboxes.get(sandboxId);
 
     if (!session) {
+        console.log(`[NOTIFY-LEAVING] Session not found for ${sandboxId}`);
         return res.status(404).json({ error: 'Sandbox session not found' });
     }
 
     const projectId = session.projectId;
     const userId = session.userId;
+
+    console.log(`[NOTIFY-LEAVING] Project: ${projectId}, User: ${userId}`);
 
     if (!projectId || !userId) {
         return res.status(400).json({ error: 'Session missing projectId or userId' });
@@ -646,12 +619,12 @@ router.get("/download/:sandboxId", async (req: Request, res: Response) => {
             'yarn.lock'
         ];
 
-        const excludeArgs = excludePatterns.map(p => `--exclude='${p}'`).join(' ');
+        const excludeArgs = excludePatterns.map(p => `-x '${p}' -x '${p}/*'`).join(' ');
 
-        const zipFileName = `project-${Date.now()}.tar.gz`;
-        const createZipCmd = `cd /home/user && tar ${excludeArgs} -czf /tmp/${zipFileName} .`;
+        const zipFileName = `project-${Date.now()}.zip`;
+        const createZipCmd = `cd /home/user && zip -qr /tmp/${zipFileName} . ${excludeArgs}`;
 
-        console.log(`[DOWNLOAD] Creating zip with command: ${createZipCmd}`);
+        console.log(`[DOWNLOAD] Creating zip archive`);
         const result = await sandbox.commands.run(createZipCmd);
 
         if (result.exitCode !== 0) {
@@ -663,7 +636,7 @@ router.get("/download/:sandboxId", async (req: Request, res: Response) => {
 
         await sandbox.commands.run(`rm /tmp/${zipFileName}`);
 
-        res.setHeader('Content-Type', 'application/gzip');
+        res.setHeader('Content-Type', 'application/zip');
         res.setHeader('Content-Disposition', `attachment; filename="${zipFileName}"`);
 
         if (typeof zipContent === 'string') {

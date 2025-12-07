@@ -1,20 +1,22 @@
-import { StateGraph, Send, Annotation, START, END } from "@langchain/langgraph";
+import { StateGraph, Annotation, START, END, type LangGraphRunnableConfig } from "@langchain/langgraph";
 import { ChatOpenAI } from "@langchain/openai";
 import { HumanMessage, SystemMessage } from "@langchain/core/messages";
 import type { Sandbox } from "e2b";
 import { INITIAL_SYSTEM_PROMPT } from "./systemPrompt";
 import { CodeGenerationSchema } from "./types";
-import type { FileContent, CodeGeneration, Plan } from "./types";
+import type { FileContent, CodeGeneration } from "./types";
+import { getThemeCSS } from "../data/themes";
 
 const log = {
-    coder: (msg: string, ...args: unknown[]) => console.log(`\x1b[36m[CODER]\x1b[0m ${msg}`, ...args),
+    codegen: (msg: string, ...args: unknown[]) => console.log(`\x1b[36m[CODEGEN]\x1b[0m ${msg}`, ...args),
+    commands: (msg: string, ...args: unknown[]) => console.log(`\x1b[35m[COMMANDS]\x1b[0m ${msg}`, ...args),
     writer: (file: string, msg: string, ...args: unknown[]) => console.log(`\x1b[33m[WRITER ${file}]\x1b[0m ${msg}`, ...args),
     orchestrator: (msg: string, ...args: unknown[]) => console.log(`\x1b[32m[ORCHESTRATOR]\x1b[0m ${msg}`, ...args),
 };
 
 const createModel = () => {
     return new ChatOpenAI({
-        model: "anthropic/claude-sonnet-4",
+        model: "anthropic/claude-sonnet-4.5",
         configuration: {
             baseURL: "https://openrouter.ai/api/v1",
             apiKey: process.env.OPENROUTER_API_KEY,
@@ -22,82 +24,48 @@ const createModel = () => {
     });
 };
 
-function extractJSONFallback(text: string): CodeGeneration {
-    let jsonStr = text;
+const GraphState = Annotation.Root({
+    prompt: Annotation<string>(),
+    systemPrompt: Annotation<string>(),
+    theme: Annotation<string | undefined>(),
+    files: Annotation<FileContent[]>(),
+    commands: Annotation<string[]>(),
+    writtenFiles: Annotation<string[]>(),
+});
 
-    const codeBlockMatch = text.match(/```(?:json)?\s*([\s\S]*?)```/);
-    if (codeBlockMatch?.[1]) {
-        jsonStr = codeBlockMatch[1].trim();
-    } else {
-        const jsonMatch = text.match(/\{[\s\S]*"files"[\s\S]*\}/);
-        if (jsonMatch) {
-            jsonStr = jsonMatch[0];
-        } else {
-            const arrayMatch = text.match(/\[[\s\S]*\]/);
-            if (arrayMatch) {
-                jsonStr = arrayMatch[0];
-            }
-        }
-    }
+type GraphStateType = typeof GraphState.State;
 
-    const parsed = JSON.parse(jsonStr);
-
-    if (Array.isArray(parsed)) {
-        return { files: parsed.map(f => ({ filePath: f.filePath || f.path, content: f.content })) };
-    }
-
-    if (parsed.files && Array.isArray(parsed.files)) {
-        return { files: parsed.files.map((f: { filePath?: string; path?: string; content: string }) => ({ filePath: f.filePath || f.path, content: f.content })) };
-    }
-
-    throw new Error('Could not extract files from response');
+interface StreamConfig extends LangGraphRunnableConfig {
+    configurable?: {
+        streamCallback?: (event: StreamEvent) => void;
+    };
 }
 
-const OrchestratorState = Annotation.Root({
-    userPrompt: Annotation<string>(),
-    systemPrompt: Annotation<string>(),
-    files: Annotation<FileContent[]>(),
-    writtenFiles: Annotation<string[]>({
-        reducer: (curr, update) => [...curr, ...update],
-        default: () => [],
-    }),
-});
+export interface StreamEvent {
+    type: 'generating' | 'file_started' | 'file_created' | 'executing' | 'stdout' | 'stderr' | 'completed' | 'error' | 'done';
+    message?: string;
+    filePath?: string;
+}
 
-const WriterState = Annotation.Root({
-    filePath: Annotation<string>(),
-    content: Annotation<string>(),
-});
+async function coderNode(state: GraphStateType, config?: StreamConfig): Promise<Partial<GraphStateType>> {
+    log.codegen('Generating code and commands...');
+    log.codegen('Prompt:', state.prompt.slice(0, 100) + (state.prompt.length > 100 ? '...' : ''));
 
-type OrchestratorStateType = typeof OrchestratorState.State;
-type WriterStateType = typeof WriterState.State;
-
-async function coderNode(state: OrchestratorStateType): Promise<Partial<OrchestratorStateType>> {
-    log.coder('Generating code...');
-    log.coder('Prompt:', state.userPrompt.slice(0, 100) + (state.userPrompt.length > 100 ? '...' : ''));
-    log.coder('Using system prompt type:', state.systemPrompt === INITIAL_SYSTEM_PROMPT ? 'INITIAL' : 'CONTEXT');
+    config?.configurable?.streamCallback?.({ type: 'generating', message: 'Generating code...' });
 
     const startTime = Date.now();
     const structuredModel = createModel().withStructuredOutput(CodeGenerationSchema);
-
     const systemPromptToUse = state.systemPrompt || INITIAL_SYSTEM_PROMPT;
 
     let result: CodeGeneration;
     try {
         result = await structuredModel.invoke([
             new SystemMessage(systemPromptToUse),
-            new HumanMessage(state.userPrompt)
+            new HumanMessage(state.prompt)
         ]);
-    } catch (structuredError) {
-        log.coder('Structured output failed, trying fallback...');
-        const rawModel = createModel();
-        const response = await rawModel.invoke([
-            new SystemMessage(systemPromptToUse),
-            new HumanMessage(state.userPrompt)
-        ]);
-        const responseText = typeof response.content === 'string'
-            ? response.content
-            : JSON.stringify(response.content);
-        result = extractJSONFallback(responseText);
+    } catch (error) {
+        log.codegen('Structured output failed:', error);
+        throw new Error('Code generation failed');
     }
 
     if (!result?.files?.length) {
@@ -105,114 +73,214 @@ async function coderNode(state: OrchestratorStateType): Promise<Partial<Orchestr
     }
 
     const duration = ((Date.now() - startTime) / 1000).toFixed(1);
-    log.coder(`Generated ${result.files.length} files in ${duration}s`);
-    result.files.forEach(f => log.coder(`  - ${f.filePath}`));
+    log.codegen(`Generated ${result.files.length} files and ${result.commands?.length || 0} commands in ${duration}s`);
+    result.files.forEach(f => log.codegen(`  📄 ${f.filePath}`));
+    result.commands?.forEach(c => log.commands(`  ⚡ ${c}`));
 
-    return { files: result.files };
-}
-
-function assignWriters(state: OrchestratorStateType): Send[] {
-    if (!state.files || state.files.length === 0) {
-        log.orchestrator('No files to write');
-        return [];
-    }
-
-    log.orchestrator(`Spawning ${state.files.length} parallel writers...`);
-
-    return state.files.map(file => {
-        return new Send("writer", {
-            filePath: file.filePath,
-            content: file.content,
-        });
-    });
-}
-
-function createWriterNode(sandbox: Sandbox) {
-    return async (state: WriterStateType): Promise<{ writtenFiles: string[] }> => {
-        const { filePath, content } = state;
-
-        log.writer(filePath, 'Writing file...');
-
-        try {
-            const dir = filePath.substring(0, filePath.lastIndexOf('/'));
-            if (dir) {
-                await sandbox.commands.run(`mkdir -p ${dir}`);
-            }
-
-            await sandbox.files.write(filePath, content);
-
-            log.writer(filePath, 'Done');
-
-            return { writtenFiles: [filePath] };
-        } catch (error) {
-            const errorMessage = error instanceof Error ? error.message : String(error);
-            log.writer(filePath, `Failed: ${errorMessage}`);
-
-            return { writtenFiles: [] };
-        }
+    return {
+        theme: result.theme,
+        files: result.files,
+        commands: result.commands || []
     };
 }
 
-function createOrchestratorGraph(sandbox: Sandbox) {
-    const writerNode = createWriterNode(sandbox);
+const log_theme = (msg: string, ...args: unknown[]) => console.log(`\x1b[34m[THEME]\x1b[0m ${msg}`, ...args);
 
-    const graph = new StateGraph(OrchestratorState)
-        .addNode("coder", coderNode)
-        .addNode("writer", writerNode, { defer: true })
-        .addEdge(START, "coder")
-        .addConditionalEdges("coder", assignWriters, ["writer"])
+function createThemeApplicatorNode(sandbox: Sandbox) {
+    return async (state: GraphStateType, config?: StreamConfig): Promise<Partial<GraphStateType>> => {
+        const themeName = state.theme;
+
+        if (!themeName) {
+            log_theme('No theme specified, using default');
+            return {};
+        }
+
+        log_theme(`Applying theme: ${themeName}`);
+        config?.configurable?.streamCallback?.({ type: 'executing', message: `Applying theme: ${themeName}` });
+
+        try {
+            const themeCSS = getThemeCSS(themeName);
+
+            if (!themeCSS) {
+                log_theme(`Theme "${themeName}" not found, skipping`);
+                return {};
+            }
+
+            // Write theme CSS directly to index.css
+            await sandbox.files.write('/home/user/src/index.css', themeCSS);
+            log_theme(`Theme "${themeName}" applied to index.css`);
+            config?.configurable?.streamCallback?.({ type: 'completed', message: `Theme "${themeName}" applied` });
+
+        } catch (error) {
+            const errorMessage = error instanceof Error ? error.message : String(error);
+            log_theme(`Error applying theme: ${errorMessage}`);
+            config?.configurable?.streamCallback?.({ type: 'error', message: `Failed to apply theme` });
+        }
+
+        return {};
+    };
+}
+
+function createCommandHandlerNode(sandbox: Sandbox) {
+    return async (state: GraphStateType, config?: StreamConfig): Promise<Partial<GraphStateType>> => {
+        const commands = state.commands || [];
+
+        if (commands.length === 0) {
+            log.commands('No commands to execute');
+            return {};
+        }
+
+        log.commands(`Running ${commands.length} commands sequentially...`);
+
+        for (let i = 0; i < commands.length; i++) {
+            const cmd = commands[i];
+            if (!cmd) continue;
+
+            const cmdNum = i + 1;
+            log.commands(`[${cmdNum}/${commands.length}] ${cmd}`);
+
+            config?.configurable?.streamCallback?.({ type: 'executing', message: `Running: ${cmd}` });
+
+            try {
+                const cmdToRun = `yes | ${cmd}`;
+                log.commands(`Running: ${cmdToRun}`);
+
+                const result = await sandbox.commands.run(cmdToRun, {
+                    cwd: '/home/user',
+                    timeoutMs: 120_000, // 2 min timeout for npm installs
+                });
+
+                if (result.stdout) {
+                    log.commands(`stdout: ${result.stdout.slice(0, 200)}`);
+                    config?.configurable?.streamCallback?.({ type: 'stdout', message: result.stdout });
+                }
+                if (result.stderr) {
+                    log.commands(`stderr: ${result.stderr.slice(0, 200)}`);
+                    config?.configurable?.streamCallback?.({ type: 'stderr', message: result.stderr });
+                }
+
+                if (result.exitCode !== 0) {
+                    log.commands(`Command failed with exit code ${result.exitCode}`);
+                    config?.configurable?.streamCallback?.({ type: 'error', message: `Command failed: ${cmd}` });
+                    // Continue with other commands even if one fails
+                }
+
+                config?.configurable?.streamCallback?.({ type: 'completed', message: `Completed: ${cmd}` });
+            } catch (error) {
+                const errorMessage = error instanceof Error ? error.message : String(error);
+                log.commands(`Command error: ${errorMessage}`);
+                config?.configurable?.streamCallback?.({ type: 'error', message: `Error: ${errorMessage}` });
+            }
+        }
+
+        log.commands('All commands executed');
+        return { commands: [] }; // Clear commands after execution
+    };
+}
+
+function createWriterNode(sandbox: Sandbox) {
+    return async (state: GraphStateType, config?: StreamConfig): Promise<Partial<GraphStateType>> => {
+        const { files } = state;
+
+        if (!files || files.length === 0) {
+            log.orchestrator('No files to write');
+            return { writtenFiles: [] };
+        }
+
+        log.orchestrator(`Writing ${files.length} files...`);
+        const writtenFiles: string[] = [];
+
+        for (let i = 0; i < files.length; i++) {
+            const file = files[i];
+            if (!file) continue;
+
+            const fileNum = i + 1;
+            log.writer(file.filePath, `Writing [${fileNum}/${files.length}]`);
+
+            config?.configurable?.streamCallback?.({ type: 'file_started', filePath: file.filePath, message: `Writing ${file.filePath}...` });
+
+            try {
+                // Create directory if needed
+                const dir = file.filePath.substring(0, file.filePath.lastIndexOf('/'));
+                if (dir) {
+                    await sandbox.commands.run(`mkdir -p ${dir}`);
+                }
+
+                // Write file
+                await sandbox.files.write(file.filePath, file.content);
+
+                log.writer(file.filePath, 'Done');
+                writtenFiles.push(file.filePath);
+
+                config?.configurable?.streamCallback?.({ type: 'file_created', filePath: file.filePath, message: `Created ${file.filePath}` });
+            } catch (error) {
+                const errorMessage = error instanceof Error ? error.message : String(error);
+                log.writer(file.filePath, `Failed: ${errorMessage}`);
+                config?.configurable?.streamCallback?.({ type: 'error', message: `Failed to write ${file.filePath}` });
+            }
+        }
+
+        log.orchestrator(`Written ${writtenFiles.length}/${files.length} files`);
+        return { writtenFiles };
+    };
+}
+
+function createGraph(sandbox: Sandbox) {
+    const themeApplicator = createThemeApplicatorNode(sandbox);
+    const commandHandler = createCommandHandlerNode(sandbox);
+    const writer = createWriterNode(sandbox);
+
+    const graph = new StateGraph(GraphState)
+        .addNode("codegen", coderNode)
+        .addNode("themeApplicator", themeApplicator)
+        .addNode("commandHandler", commandHandler)
+        .addNode("writer", writer)
+        .addEdge(START, "codegen")
+        .addEdge("codegen", "themeApplicator")
+        .addEdge("themeApplicator", "commandHandler")
+        .addEdge("commandHandler", "writer")
         .addEdge("writer", END);
 
     return graph.compile();
 }
 
-export interface WorkerEvent {
-    type: 'generating' | 'files_ready' | 'file_writing' | 'file_written' | 'done' | 'error' | 'plan';
-    file?: string;
-    files?: FileContent[];
-    success?: boolean;
-    error?: string;
-    message?: string;
-    plan?: Plan;
-}
-
-export async function runMultiAgentOrchestrator(
+export async function runOrchestrator(
     sandbox: Sandbox,
-    userPrompt: string,
+    prompt: string,
     systemPrompt: string = INITIAL_SYSTEM_PROMPT
-): Promise<{
-    files: FileContent[];
-    writtenFiles: string[];
-}> {
-    log.orchestrator('Starting Code Generation');
-    log.orchestrator('System prompt type:', systemPrompt === INITIAL_SYSTEM_PROMPT ? 'INITIAL' : 'CONTEXT');
+): Promise<{ files: FileContent[]; writtenFiles: string[] }> {
+    log.orchestrator('Starting code generation');
 
-    const graph = createOrchestratorGraph(sandbox);
-    const result = await graph.invoke({ userPrompt, systemPrompt });
+    const graph = createGraph(sandbox);
+    const result = await graph.invoke({
+        prompt,
+        systemPrompt,
+        files: [],
+        commands: [],
+        writtenFiles: []
+    });
 
-    log.orchestrator('Code Generation Complete');
-
+    log.orchestrator('Code generation complete');
     return {
-        files: result.files,
-        writtenFiles: result.writtenFiles
+        files: result.files || [],
+        writtenFiles: result.writtenFiles || []
     };
 }
 
-export async function* streamMultiAgentOrchestrator(
+export async function* streamOrchestrator(
     sandbox: Sandbox,
-    userPrompt: string,
+    prompt: string,
     systemPrompt: string = INITIAL_SYSTEM_PROMPT
-): AsyncGenerator<WorkerEvent> {
-    log.orchestrator('Starting Code Generation');
-    log.orchestrator('System prompt type:', systemPrompt === INITIAL_SYSTEM_PROMPT ? 'INITIAL' : 'CONTEXT');
+): AsyncGenerator<StreamEvent> {
+    log.orchestrator('Starting code generation (streaming)');
 
-    const graph = createOrchestratorGraph(sandbox);
+    const graph = createGraph(sandbox);
 
-    yield { type: 'generating', message: 'Generating code...' };
+    yield { type: 'generating', message: 'Starting code generation...' };
 
     try {
         const stream = graph.streamEvents(
-            { userPrompt, systemPrompt },
+            { prompt, systemPrompt, files: [], commands: [], writtenFiles: [] },
             { version: "v2" }
         );
 
@@ -222,38 +290,42 @@ export async function* streamMultiAgentOrchestrator(
 
         for await (const event of stream) {
             if (event.event === "on_chain_end") {
-                if (event.name === "coder" && event.data?.output?.files) {
+                // Codegen completed
+                if (event.name === "codegen" && event.data?.output?.files) {
                     files = event.data.output.files as FileContent[];
-                    yield { type: 'files_ready', files };
+                    const commands = (event.data.output.commands || []) as string[];
 
-                    for (const file of files) {
-                        if (!emittedWriteStarts.has(file.filePath)) {
-                            emittedWriteStarts.add(file.filePath);
-                            yield { type: 'file_writing', file: file.filePath };
-                        }
+                    yield { type: 'generating', message: `Generated ${files.length} files, ${commands.length} commands` };
+
+                    // Emit command execution events
+                    for (const cmd of commands) {
+                        yield { type: 'executing', message: `Running: ${cmd}` };
                     }
                 }
 
+                // Writer completed
                 if (event.name === "writer" && event.data?.output?.writtenFiles) {
                     const written = event.data.output.writtenFiles as string[];
                     for (const filePath of written) {
                         if (!emittedWriteCompletes.has(filePath)) {
                             emittedWriteCompletes.add(filePath);
-                            yield { type: 'file_written', file: filePath, success: true };
+                            yield { type: 'file_created', filePath, message: `Created ${filePath}` };
                         }
                     }
                 }
             }
         }
 
-        log.orchestrator('Code Generation Complete');
-        yield { type: 'done' };
+        log.orchestrator('Code generation complete');
+        yield { type: 'done', message: 'Code generation complete' };
 
     } catch (error) {
         const errorMessage = error instanceof Error ? error.message : String(error);
         log.orchestrator(`Error: ${errorMessage}`);
-        yield { type: 'error', error: errorMessage, message: 'Code generation failed' };
+        yield { type: 'error', message: errorMessage };
     }
 }
 
-export { createAgentGraph, type AgentGraph, streamAgentResponse, runAgent } from "./graph";
+// Legacy alias for backward compatibility
+export const streamMultiAgentOrchestrator = streamOrchestrator;
+export const runMultiAgentOrchestrator = runOrchestrator;

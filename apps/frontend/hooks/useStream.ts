@@ -315,6 +315,11 @@ export function useStream(projectId: string) {
         setFileChanges([]);
     }, []);
 
+    const setSandbox = useCallback((url: string, id: string) => {
+        setSandboxUrl(url);
+        setSandboxId(id);
+    }, []);
+
     return {
         data,
         isStreaming,
@@ -328,5 +333,6 @@ export function useStream(projectId: string) {
         stopStream,
         resetStream,
         clearFileChanges,
+        setSandbox,
     };
 }

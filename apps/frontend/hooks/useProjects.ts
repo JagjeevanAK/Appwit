@@ -49,9 +49,37 @@ export function useProjects() {
         }
     }, []);
 
+    const deleteProject = useCallback(async (projectId: string) => {
+        try {
+            const token = localStorage.getItem("auth_token");
+            if (!token) {
+                throw new Error("Not authenticated");
+            }
+
+            const response = await fetch(`${BackendUrl}/project/${projectId}`, {
+                method: "DELETE",
+                headers: {
+                    "Authorization": `Bearer ${token}`
+                }
+            });
+
+            if (!response.ok) {
+                throw new Error("Failed to delete project");
+            }
+
+            // Optimistically remove from local state
+            setProjects(prev => prev.filter(p => p.id !== projectId));
+            return true;
+        } catch (err) {
+            console.error("Error deleting project:", err);
+            throw err;
+        }
+    }, []);
+
     useEffect(() => {
         fetchProjects();
     }, [fetchProjects]);
 
-    return { projects, loading, error, refetch: fetchProjects };
+    return { projects, loading, error, refetch: fetchProjects, deleteProject };
 }
+

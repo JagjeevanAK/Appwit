@@ -19,7 +19,13 @@ const EXCLUDE_PATTERNS = [
 ];
 
 export function isR2Configured(): boolean {
-    return !!(R2_ACCOUNT_ID && R2_ACCESS_KEY_ID && R2_SECRET_ACCESS_KEY && R2_BUCKET_NAME);
+    const configured = !!(R2_ACCOUNT_ID && R2_ACCESS_KEY_ID && R2_SECRET_ACCESS_KEY && R2_BUCKET_NAME);
+    return configured;
+}
+
+console.log(`[R2] Configuration status: ${isR2Configured() ? 'CONFIGURED' : 'NOT CONFIGURED'}`);
+if (!isR2Configured()) {
+    console.log(`[R2] Missing env vars - ACCOUNT_ID: ${!!R2_ACCOUNT_ID}, ACCESS_KEY: ${!!R2_ACCESS_KEY_ID}, SECRET_KEY: ${!!R2_SECRET_ACCESS_KEY}, BUCKET: ${!!R2_BUCKET_NAME}`);
 }
 
 export async function mountR2Bucket(sandbox: Sandbox): Promise<boolean> {
@@ -29,18 +35,25 @@ export async function mountR2Bucket(sandbox: Sandbox): Promise<boolean> {
     }
 
     try {
+        console.log(`[R2] Starting mount for bucket: ${R2_BUCKET_NAME}`);
+
         await sandbox.files.makeDir(BACKUP_MOUNT_PATH);
+        console.log(`[R2] Created mount directory: ${BACKUP_MOUNT_PATH}`);
 
         const credentials = `${R2_ACCESS_KEY_ID}:${R2_SECRET_ACCESS_KEY}`;
         await sandbox.files.write("/root/.passwd-s3fs", credentials);
         await sandbox.commands.run("sudo chmod 600 /root/.passwd-s3fs");
+        console.log("[R2] Credentials file created");
 
-        const mountCommand = `sudo s3fs ${R2_BUCKET_NAME} ${BACKUP_MOUNT_PATH} -o url=https://${R2_ACCOUNT_ID}.r2.cloudflarestorage.com -o use_path_request_style -o allow_other`;
+        // Format as per E2B docs: s3fs -o url=... <flags> <bucket> <mountpoint>
+        const mountCommand = `sudo s3fs -o url=https://${R2_ACCOUNT_ID}.r2.cloudflarestorage.com -o use_path_request_style -o allow_other ${R2_BUCKET_NAME} ${BACKUP_MOUNT_PATH}`;
 
+        console.log(`[R2] Mount command: ${mountCommand}`);
         const result = await sandbox.commands.run(mountCommand);
 
         if (result.exitCode !== 0) {
             console.error("[R2] Failed to mount bucket:", result.stderr);
+            console.error("[R2] stdout:", result.stdout);
             return false;
         }
 

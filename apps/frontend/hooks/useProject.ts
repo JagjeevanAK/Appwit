@@ -10,6 +10,8 @@ interface Project {
     status: string;
     createdAt: string;
     updatedAt: string;
+    r2BackupPath?: string | null;
+    lastBackupAt?: string | null;
     chats?: Array<{
         id: string;
         messages: Array<{

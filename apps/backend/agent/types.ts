@@ -6,7 +6,9 @@ export const FileContentSchema = z.object({
 });
 
 export const CodeGenerationSchema = z.object({
+    theme: z.string().optional().describe("Theme name to apply: vercel, twitter, darkmatter, caffeine, claymorphism, graphite, mocha-mousse, elegant-luxury, sage-garden, amethyst-haze"),
     files: z.array(FileContentSchema).describe("Array of files to create/update with their complete content"),
+    commands: z.array(z.string()).describe("Terminal commands to run before writing files (e.g., 'npx shadcn@latest add button card')"),
 });
 
 export const TaskSchema = z.object({
