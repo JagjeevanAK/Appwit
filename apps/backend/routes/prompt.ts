@@ -9,6 +9,7 @@ import type { Plan } from "../agent/types";
 import { prisma } from "../lib/prisma";
 import { MessageRole } from "../generated/prisma/client";
 import type { AuthRequest } from "../middleware/auth";
+import { performFullRestore, performFullBackup, isR2Configured } from "../lib/r2";
 
 const router = Router();
 
@@ -23,6 +24,7 @@ interface SandboxSession {
     plan?: Plan;
     projectId?: string;
     chatId?: string;
+    userId?: string;
 }
 
 export const activeSandboxes = new Map<string, SandboxSession>();
@@ -141,6 +143,15 @@ router.post("/", async (req: AuthRequest, res: Response) => {
 
         const isFirst = await isFirstMessage(chatId);
 
+        // Restore project files from R2 if this is a returning project
+        if (!isFirst && isR2Configured()) {
+            console.log(`[R2] Attempting to restore project ${projectId} for user ${userId}`);
+            const restored = await performFullRestore(sandbox, userId, projectId);
+            if (restored) {
+                console.log(`[R2] Project ${projectId} restored from backup`);
+            }
+        }
+
         await saveMessage(chatId, MessageRole.USER, prompt);
 
         // Build context messages based on whether this is first or subsequent prompt
@@ -172,7 +183,8 @@ router.post("/", async (req: AuthRequest, res: Response) => {
             messages: initialMessages,
             sandboxUrl,
             projectId,
-            chatId
+            chatId,
+            userId
         });
 
         console.log(`Sandbox created: ${sandboxUrl}, ID: ${sandboxId}${projectId ? `, Project: ${projectId}` : ''}`);
@@ -452,6 +464,17 @@ router.delete("/:sandboxId", async (req: Request, res: Response) => {
     }
 
     try {
+        // Backup project to R2 before killing sandbox
+        if (session.userId && session.projectId && isR2Configured()) {
+            console.log(`[R2] Backing up project ${session.projectId} before termination`);
+            const backed = await performFullBackup(session.sandbox, session.userId, session.projectId);
+            if (backed) {
+                console.log(`[R2] Project ${session.projectId} backed up successfully`);
+            } else {
+                console.warn(`[R2] Failed to backup project ${session.projectId}`);
+            }
+        }
+
         await session.sandbox.kill();
         activeSandboxes.delete(sandboxId);
         res.json({ success: true, message: 'Sandbox closed' });

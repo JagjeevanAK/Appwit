@@ -1,4 +1,25 @@
 services:
+  db:
+    image: postgres:16-alpine
+    container_name: appwit-db
+    restart: unless-stopped
+    environment:
+      POSTGRES_DB: ${POSTGRES_DB:-appwit_db}
+      POSTGRES_USER: ${POSTGRES_USER:-appwit}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-appwit_password}
+    ports:
+      - "${POSTGRES_PORT:-5432}:5432"
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+    networks:
+      - appwit-network
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER:-appwit}"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 10s
+
   backend:
     image: ${BACKEND_IMAGE:-appwit/backend:latest}
     build:
@@ -11,8 +32,12 @@ services:
     environment:
       NODE_ENV: ${NODE_ENV:-production}
       PORT: ${BACKEND_PORT:-3000}
+      DATABASE_URL: postgresql://${POSTGRES_USER:-appwit}:${POSTGRES_PASSWORD:-appwit_password}@db:5432/${POSTGRES_DB:-appwit_db}
     ports:
       - "${BACKEND_PORT:-3000}:3000"
+    depends_on:
+      db:
+        condition: service_healthy
     networks:
       - appwit-network
     healthcheck:
@@ -48,5 +73,6 @@ networks:
     driver: bridge
 
 volumes:
+  postgres_data:
   backend_data:
   frontend_data:
