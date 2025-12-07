@@ -10,6 +10,8 @@ RUN bun install
 
 COPY apps/backend ./apps/backend
 
+RUN cd apps/backend && bunx prisma generate
+
 EXPOSE 3000
 
-CMD ["bun", "start:backend"]
+CMD ["sh", "-c", "cd apps/backend && bunx prisma migrate deploy && bun run index.ts"]
