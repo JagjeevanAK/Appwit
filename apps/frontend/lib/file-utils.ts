@@ -61,7 +61,7 @@ export function buildFileTreeFromSandbox(files: SandboxFile[], basePath: string 
   for (const file of files) {
     const node = pathMap.get(file.path)!;
     const parentPath = file.path.substring(0, file.path.lastIndexOf('/'));
-    
+
     if (parentPath === basePath || parentPath === '') {
       tree.push(node);
     } else {
@@ -98,44 +98,57 @@ export async function fetchSandboxFileTree(
   basePath: string = '/home/user'
 ): Promise<FileNode[]> {
   console.log('fetchSandboxFileTree called with:', { sandboxId, basePath });
-  
-  // Directories to exclude from traversal
-  const excludeDirs = ['node_modules', '.git', 'dist', 'build', '.next', '.vite', '.vite-temp'];
-  
-  // Files to exclude (system/config files)
+
+  const excludeDirs = [
+    'node_modules',
+    '.git',
+    'dist',
+    'build',
+    '.next',
+    '.vite',
+    '.vite-temp',
+    '.npm',
+    '.cache',
+    '.local',
+    '.config',
+    '.pnpm',
+    '.yarn',
+    '.bun'
+  ];
+
   const excludeFiles = ['.bash_logout', '.bashrc', '.profile'];
-  
+
   const allFiles: SandboxFile[] = [];
   const dirsToProcess: string[] = [basePath];
   const processedDirs = new Set<string>();
 
   while (dirsToProcess.length > 0) {
     const currentPath = dirsToProcess.shift()!;
-    
+
     if (processedDirs.has(currentPath)) continue;
     processedDirs.add(currentPath);
 
     console.log('Fetching files from path:', currentPath);
     const files = await listFilesFunc(sandboxId, currentPath);
     console.log('Got files:', files);
-    
+
     if (!files) continue;
 
     for (const file of files) {
       const fileName = file.name;
-      
+
       if (file.type === 'dir' && excludeDirs.includes(fileName)) {
         console.log('Skipping excluded directory:', fileName);
         continue;
       }
-      
+
       if (file.type === 'file' && excludeFiles.includes(fileName)) {
         console.log('Skipping excluded file:', fileName);
         continue;
       }
-      
+
       allFiles.push(file);
-      
+
       if (file.type === 'dir') {
         dirsToProcess.push(file.path);
       }
@@ -155,10 +168,10 @@ export async function loadFileContent(
 ): Promise<string> {
   console.log('loadFileContent called with:', { sandboxId, filePath });
   console.log('readFileFunc type:', typeof readFileFunc);
-  
+
   const content = await readFileFunc(sandboxId, filePath);
   console.log('Content received:', content ? `${content.length} chars` : 'null');
-  
+
   return content || '// Unable to load file content';
 }
 
@@ -186,7 +199,7 @@ export function mergeFileTrees(
   newTree: FileNode[]
 ): FileNode[] {
   const oldNodeMap = new Map<string, FileNode>();
-  
+
   const buildNodeMap = (nodes: FileNode[]) => {
     for (const node of nodes) {
       oldNodeMap.set(node.id, node);
@@ -200,7 +213,7 @@ export function mergeFileTrees(
   const mergeNodes = (newNodes: FileNode[]): FileNode[] => {
     return newNodes.map((newNode) => {
       const oldNode = oldNodeMap.get(newNode.id);
-      
+
       if (!oldNode) {
         return newNode;
       }

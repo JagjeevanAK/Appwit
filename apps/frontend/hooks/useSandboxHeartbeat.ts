@@ -1,4 +1,5 @@
 import { useEffect, useRef } from 'react';
+import { BackendUrl } from '@/config';
 
 const HEARTBEAT_INTERVAL = 60000;
 
@@ -12,8 +13,12 @@ export function useSandboxHeartbeat(sandboxId: string | null) {
 
         const sendHeartbeat = async () => {
             try {
-                await fetch(`http://localhost:3000/api/prompt/refresh/${sandboxId}`, {
+                const token = localStorage.getItem('auth_token');
+                await fetch(`${BackendUrl}/prompt/refresh/${sandboxId}`, {
                     method: 'POST',
+                    headers: token ? {
+                        'Authorization': `Bearer ${token}`
+                    } : {}
                 });
             } catch (error) {
                 console.error('Failed to send sandbox heartbeat:', error);

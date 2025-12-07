@@ -2,9 +2,9 @@ import { StateGraph, Send, Annotation, START, END } from "@langchain/langgraph";
 import { ChatOpenAI } from "@langchain/openai";
 import { HumanMessage, SystemMessage } from "@langchain/core/messages";
 import type { Sandbox } from "e2b";
-import { SYSTEM_PROMPT } from "./systemPrompt";
+import { INITIAL_SYSTEM_PROMPT } from "./systemPrompt";
 import { CodeGenerationSchema } from "./types";
-import type { FileContent, CodeGeneration } from "./types";
+import type { FileContent, CodeGeneration, Plan } from "./types";
 
 const log = {
     coder: (msg: string, ...args: unknown[]) => console.log(`\x1b[36m[CODER]\x1b[0m ${msg}`, ...args),
@@ -14,7 +14,7 @@ const log = {
 
 const createModel = () => {
     return new ChatOpenAI({
-        model: "openai/gpt-5.1-codex",
+        model: "anthropic/claude-sonnet-4",
         configuration: {
             baseURL: "https://openrouter.ai/api/v1",
             apiKey: process.env.OPENROUTER_API_KEY,
@@ -55,6 +55,7 @@ function extractJSONFallback(text: string): CodeGeneration {
 
 const OrchestratorState = Annotation.Root({
     userPrompt: Annotation<string>(),
+    systemPrompt: Annotation<string>(),
     files: Annotation<FileContent[]>(),
     writtenFiles: Annotation<string[]>({
         reducer: (curr, update) => [...curr, ...update],
@@ -73,21 +74,24 @@ type WriterStateType = typeof WriterState.State;
 async function coderNode(state: OrchestratorStateType): Promise<Partial<OrchestratorStateType>> {
     log.coder('Generating code...');
     log.coder('Prompt:', state.userPrompt.slice(0, 100) + (state.userPrompt.length > 100 ? '...' : ''));
+    log.coder('Using system prompt type:', state.systemPrompt === INITIAL_SYSTEM_PROMPT ? 'INITIAL' : 'CONTEXT');
 
     const startTime = Date.now();
     const structuredModel = createModel().withStructuredOutput(CodeGenerationSchema);
 
+    const systemPromptToUse = state.systemPrompt || INITIAL_SYSTEM_PROMPT;
+
     let result: CodeGeneration;
     try {
         result = await structuredModel.invoke([
-            new SystemMessage(SYSTEM_PROMPT),
+            new SystemMessage(systemPromptToUse),
             new HumanMessage(state.userPrompt)
         ]);
     } catch (structuredError) {
         log.coder('Structured output failed, trying fallback...');
         const rawModel = createModel();
         const response = await rawModel.invoke([
-            new SystemMessage(SYSTEM_PROMPT),
+            new SystemMessage(systemPromptToUse),
             new HumanMessage(state.userPrompt)
         ]);
         const responseText = typeof response.content === 'string'
@@ -169,20 +173,22 @@ export interface WorkerEvent {
     success?: boolean;
     error?: string;
     message?: string;
-    plan?: any;
+    plan?: Plan;
 }
 
 export async function runMultiAgentOrchestrator(
     sandbox: Sandbox,
-    userPrompt: string
+    userPrompt: string,
+    systemPrompt: string = INITIAL_SYSTEM_PROMPT
 ): Promise<{
     files: FileContent[];
     writtenFiles: string[];
 }> {
     log.orchestrator('Starting Code Generation');
+    log.orchestrator('System prompt type:', systemPrompt === INITIAL_SYSTEM_PROMPT ? 'INITIAL' : 'CONTEXT');
 
     const graph = createOrchestratorGraph(sandbox);
-    const result = await graph.invoke({ userPrompt });
+    const result = await graph.invoke({ userPrompt, systemPrompt });
 
     log.orchestrator('Code Generation Complete');
 
@@ -194,9 +200,11 @@ export async function runMultiAgentOrchestrator(
 
 export async function* streamMultiAgentOrchestrator(
     sandbox: Sandbox,
-    userPrompt: string
+    userPrompt: string,
+    systemPrompt: string = INITIAL_SYSTEM_PROMPT
 ): AsyncGenerator<WorkerEvent> {
     log.orchestrator('Starting Code Generation');
+    log.orchestrator('System prompt type:', systemPrompt === INITIAL_SYSTEM_PROMPT ? 'INITIAL' : 'CONTEXT');
 
     const graph = createOrchestratorGraph(sandbox);
 
@@ -204,7 +212,7 @@ export async function* streamMultiAgentOrchestrator(
 
     try {
         const stream = graph.streamEvents(
-            { userPrompt },
+            { userPrompt, systemPrompt },
             { version: "v2" }
         );
 

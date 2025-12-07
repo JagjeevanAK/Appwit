@@ -20,7 +20,7 @@ export function useProjects() {
     const fetchProjects = useCallback(async () => {
         try {
             setLoading(true);
-            const token = localStorage.getItem("token");
+            const token = localStorage.getItem("auth_token");
 
             if (!token) {
                 setProjects([]);

@@ -107,7 +107,7 @@ export default function InputBox({
                 onInput={handleInput}
                 onChange={(e) => setInput(e.target.value)}
                 className={cn(
-                    "w-full resize-none bg-transparent px-2 py-2 text-base outline-none placeholder:text-muted-foreground min-h-[60px]",
+                    "w-full resize-none bg-transparent px-2 py-2 text-base outline-none placeholder:text-muted-foreground min-h-[60px] text-foreground",
                     style,
                     maxHeight?.startsWith('max-h-') ? maxHeight : undefined
                 )}

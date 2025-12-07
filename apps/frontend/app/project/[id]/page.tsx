@@ -11,7 +11,8 @@ import { useStream } from "@/hooks/useStream"
 import { useParams, useRouter } from "next/navigation"
 import { useSandboxHeartbeat } from "@/hooks/useSandboxHeartbeat"
 import { useProject } from "@/hooks/useProject"
-import { useEffect } from "react"
+import { useEffect, useState, useRef } from "react"
+import { BackendUrl } from "@/config"
 
 export default function ProjectPage() {
     const params = useParams();
@@ -20,10 +21,46 @@ export default function ProjectPage() {
 
     const { project, loading, error } = useProject(projectId);
     const streamState = useStream(projectId);
+    const [initialPrompt, setInitialPrompt] = useState<string | null>(null);
+    const hasNotifiedLeaving = useRef(false);
 
     useSandboxHeartbeat(streamState.sandboxId);
 
-    // Redirect if project not found or unauthorized
+    useEffect(() => {
+        const pendingPrompt = localStorage.getItem('pendingPrompt');
+        if (pendingPrompt) {
+            setInitialPrompt(pendingPrompt);
+            localStorage.removeItem('pendingPrompt');
+        }
+    }, []);
+
+    useEffect(() => {
+        const sandboxId = streamState.sandboxId;
+        if (!sandboxId) return;
+
+        const notifyLeaving = () => {
+            if (hasNotifiedLeaving.current) return;
+            hasNotifiedLeaving.current = true;
+
+            const token = localStorage.getItem('auth_token');
+
+            navigator.sendBeacon(
+                `${BackendUrl}/prompt/notify-leaving/${sandboxId}`,
+                new Blob([JSON.stringify({ token })], { type: 'application/json' })
+            );
+            console.log('[PAGE] Notified backend about leaving project');
+        };
+
+        // Handle browser close/tab close
+        window.addEventListener('beforeunload', notifyLeaving);
+
+        return () => {
+            window.removeEventListener('beforeunload', notifyLeaving);
+            // Also notify on component unmount (route change within app)
+            notifyLeaving();
+        };
+    }, [streamState.sandboxId]);
+
     useEffect(() => {
         if (!loading && (error || !project)) {
             router.push("/project");
@@ -39,7 +76,7 @@ export default function ProjectPage() {
     }
 
     if (error || !project) {
-        return null; // Will redirect via useEffect
+        return null;
     }
 
     return (
@@ -47,7 +84,7 @@ export default function ProjectPage() {
             <div className="relative w-[calc(100vw-20px)] h-[calc(100vh-20px)]">
                 <ResizablePanelGroup direction="horizontal">
                     <ResizablePanel defaultSize={25} minSize={20}>
-                        <ChatBar streamState={streamState} initialPrompt={null} />
+                        <ChatBar streamState={streamState} initialPrompt={initialPrompt} />
                     </ResizablePanel>
 
                     <ResizableHandle isTransparent />

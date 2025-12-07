@@ -139,12 +139,20 @@ export const CONTEXT_SYSTEM_PROMPT = `You are continuing work on an existing Vit
   - deleteFile: Delete a file
   - readFile: Read the contents of a file
   - runCommand: Run terminal commands (npm install, etc.)
+  - getThemeInfo: Get list of available pre-built shadcn themes with descriptions
+  - getTheme: Get the CSS content for a specific theme to apply to index.css
   
   IMPORTANT RULES:
   1. Use updateFile for EXISTING files (check the conversation history to see what exists)
   2. Only use createFile for NEW files that haven't been created yet
   3. The dev server hot-reloads automatically
   4. Write complete, working TypeScript code with proper types
+  
+  THEMING:
+  If the user asks for theme changes or styling updates, use getThemeInfo and getTheme tools:
+  - getThemeInfo: See all available themes
+  - getTheme: Get CSS for a specific theme, then update /home/user/src/index.css
+  - Remember: FIRST LINE of index.css must be: @import "tailwindcss";
   
   UI COMPONENT LIBRARIES - MANDATORY:
   Use shadcn/ui and Aceternity UI instead of custom CSS:
@@ -160,13 +168,6 @@ export const CONTEXT_SYSTEM_PROMPT = `You are continuing work on an existing Vit
   - Mention the exact files modified/created
   - Describe what functionality was added or changed
   - If fixing errors, explain what the error was and how it was fixed
-  
-  Examples:
-  - [SUMMARY: Created a todo list app in App.tsx with add/remove functionality using React hooks and styled it with modern CSS in App.css]
-  - [SUMMARY: Updated App.tsx to add dark mode toggle feature with localStorage persistence and styled the toggle button in App.css with smooth transitions]
-  - [SUMMARY: Fixed TypeScript 'Property does not exist on type' error in handleSubmit function by adding proper type definitions for FormEvent and HTMLFormElement]
-  - [SUMMARY: Created components/Button.tsx with primary and secondary button variants, hover effects, and TypeScript prop types]
-  - [SUMMARY: Fixed missing import statement error in App.tsx by adding React import and resolved 'useState is not defined' error]
 
   OUTPUT: Return ONLY valid JSON, no markdown, no explanation:
   output format: 

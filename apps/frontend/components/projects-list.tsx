@@ -3,10 +3,22 @@
 import { useProjects, Project } from "@/hooks/useProjects";
 import { useRouter } from "next/navigation";
 import { formatDistanceToNow } from "date-fns";
+import { useState, useEffect } from "react";
 
 export function ProjectsList() {
     const { projects, loading, error } = useProjects();
     const router = useRouter();
+    const [mounted, setMounted] = useState(false);
+
+    // Prevent hydration mismatch - only render after client mount
+    useEffect(() => {
+        setMounted(true);
+    }, []);
+
+    // Return null on server and during initial client render
+    if (!mounted) {
+        return null;
+    }
 
     if (loading) {
         return (
@@ -19,11 +31,11 @@ export function ProjectsList() {
     }
 
     if (error) {
-        return null; // Silently fail - don't show error on home page
+        return null;
     }
 
     if (projects.length === 0) {
-        return null; // Don't show anything if no projects
+        return null;
     }
 
     const handleProjectClick = (project: Project) => {
@@ -73,7 +85,7 @@ export function ProjectsList() {
             </div>
             {projects.length > 5 && (
                 <button
-                    onClick={() => router.push('/projects')}
+                    onClick={() => router.push('/project')}
                     className="w-full mt-3 py-2 text-sm text-white/50 hover:text-white/70 transition-colors"
                 >
                     View all {projects.length} projects →

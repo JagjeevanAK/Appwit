@@ -29,7 +29,16 @@ interface SandboxSession {
 
 export const activeSandboxes = new Map<string, SandboxSession>();
 
-// Helper function to extract summary from LLM response
+interface PendingShutdown {
+    timeoutId: NodeJS.Timeout;
+    scheduledAt: Date;
+    projectId: string;
+    userId: string;
+}
+
+const pendingShutdowns = new Map<string, PendingShutdown>();
+const SHUTDOWN_DELAY_MS = 2 * 60 * 1000;
+
 function extractSummary(content: string): { cleanContent: string; summary: string | null } {
     const summaryMatch = content.match(/\[SUMMARY:\s*(.+?)\]/i);
     if (summaryMatch?.[1]) {
@@ -40,15 +49,12 @@ function extractSummary(content: string): { cleanContent: string; summary: strin
     return { cleanContent: content, summary: null };
 }
 
-// Helper function to get or create chat for a project
 async function getOrCreateChat(projectId: string): Promise<string> {
-    // Try to find an existing chat for this project
     let chat = await prisma.chat.findFirst({
         where: { projectId },
         orderBy: { createdAt: 'desc' }
     });
 
-    // If no chat exists, create one
     if (!chat) {
         chat = await prisma.chat.create({
             data: { projectId }
@@ -97,6 +103,87 @@ async function getChatHistory(chatId: string, limit: number = 10): Promise<BaseM
             return new SystemMessage(msg.content);
         }
     });
+}
+
+// Cancel a pending shutdown for a sandbox (called when user returns)
+function cancelPendingShutdown(sandboxId: string): boolean {
+    const pending = pendingShutdowns.get(sandboxId);
+    if (pending) {
+        clearTimeout(pending.timeoutId);
+        pendingShutdowns.delete(sandboxId);
+        console.log(`[SHUTDOWN] Cancelled pending shutdown for sandbox ${sandboxId}`);
+        return true;
+    }
+    return false;
+}
+
+// Schedule a delayed shutdown with R2 backup
+function scheduleShutdown(sandboxId: string, projectId: string, userId: string): void {
+    // Cancel any existing pending shutdown first
+    cancelPendingShutdown(sandboxId);
+
+    const timeoutId = setTimeout(async () => {
+        await performShutdownWithBackup(sandboxId);
+    }, SHUTDOWN_DELAY_MS);
+
+    pendingShutdowns.set(sandboxId, {
+        timeoutId,
+        scheduledAt: new Date(),
+        projectId,
+        userId
+    });
+
+    console.log(`[SHUTDOWN] Scheduled shutdown for sandbox ${sandboxId} in ${SHUTDOWN_DELAY_MS / 1000}s`);
+}
+
+// Perform backup and shutdown
+async function performShutdownWithBackup(sandboxId: string): Promise<void> {
+    const session = activeSandboxes.get(sandboxId);
+    const pending = pendingShutdowns.get(sandboxId);
+
+    if (!session) {
+        console.log(`[SHUTDOWN] Session ${sandboxId} not found, skipping`);
+        pendingShutdowns.delete(sandboxId);
+        return;
+    }
+
+    const projectId = session.projectId || pending?.projectId;
+    const userId = session.userId || pending?.userId;
+
+    console.log(`[SHUTDOWN] Executing scheduled shutdown for sandbox ${sandboxId}`);
+
+    try {
+        // Perform R2 backup if configured
+        if (userId && projectId && isR2Configured()) {
+            console.log(`[R2] Backing up project ${projectId} before scheduled termination`);
+            const backed = await performFullBackup(session.sandbox, userId, projectId);
+
+            if (backed) {
+                // Update project with R2 backup path
+                const r2BackupPath = `/${userId}/${projectId}/`;
+                await prisma.project.update({
+                    where: { id: projectId },
+                    data: {
+                        r2BackupPath,
+                        lastBackupAt: new Date()
+                    }
+                });
+                console.log(`[R2] Project ${projectId} backed up to ${r2BackupPath}`);
+            } else {
+                console.warn(`[R2] Failed to backup project ${projectId}`);
+            }
+        }
+
+        // Kill the sandbox
+        await session.sandbox.kill();
+        console.log(`[SHUTDOWN] Sandbox ${sandboxId} killed successfully`);
+    } catch (error) {
+        console.error(`[SHUTDOWN] Error during shutdown of ${sandboxId}:`, error);
+    } finally {
+        // Cleanup
+        activeSandboxes.delete(sandboxId);
+        pendingShutdowns.delete(sandboxId);
+    }
 }
 
 router.post("/", async (req: AuthRequest, res: Response) => {
@@ -199,7 +286,11 @@ router.post("/", async (req: AuthRequest, res: Response) => {
 
         if (useMultiAgent) {
             try {
-                for await (const event of streamMultiAgentOrchestrator(sandbox, prompt)) {
+                // Use INITIAL prompt for first message, CONTEXT prompt for subsequent
+                const systemPromptToUse = isFirst ? INITIAL_SYSTEM_PROMPT : CONTEXT_SYSTEM_PROMPT;
+                console.log(`Using ${isFirst ? 'INITIAL' : 'CONTEXT'} system prompt for orchestrator`);
+
+                for await (const event of streamMultiAgentOrchestrator(sandbox, prompt, systemPromptToUse)) {
                     res.write(`data: ${JSON.stringify(event)}\n\n`);
 
                     if (event.type === 'plan' && event.plan) {
@@ -435,6 +526,12 @@ router.post("/refresh/:sandboxId", async (req: Request, res: Response) => {
         return res.status(400).json({ error: 'sandboxId is required' });
     }
 
+    // Cancel any pending shutdown - user is back
+    const wasPending = cancelPendingShutdown(sandboxId);
+    if (wasPending) {
+        console.log(`[REFRESH] User returned, cancelled pending shutdown for ${sandboxId}`);
+    }
+
     const session = activeSandboxes.get(sandboxId);
 
     if (!session) {
@@ -443,11 +540,41 @@ router.post("/refresh/:sandboxId", async (req: Request, res: Response) => {
 
     try {
         await session.sandbox.setTimeout(200_000);
-        res.json({ success: true, message: 'Sandbox timeout refreshed' });
+        res.json({ success: true, message: 'Sandbox timeout refreshed', cancelledShutdown: wasPending });
     } catch (error) {
         console.error('Error refreshing sandbox timeout:', error);
         res.status(500).json({ error: 'Failed to refresh sandbox timeout' });
     }
+});
+
+router.post("/notify-leaving/:sandboxId", async (req: Request, res: Response) => {
+    const sandboxId = req.params.sandboxId;
+
+    if (!sandboxId) {
+        return res.status(400).json({ error: 'sandboxId is required' });
+    }
+
+    const session = activeSandboxes.get(sandboxId);
+
+    if (!session) {
+        return res.status(404).json({ error: 'Sandbox session not found' });
+    }
+
+    const projectId = session.projectId;
+    const userId = session.userId;
+
+    if (!projectId || !userId) {
+        return res.status(400).json({ error: 'Session missing projectId or userId' });
+    }
+
+    // Schedule shutdown after delay
+    scheduleShutdown(sandboxId, projectId, userId);
+
+    res.json({
+        success: true,
+        message: `Sandbox shutdown scheduled in ${SHUTDOWN_DELAY_MS / 1000} seconds`,
+        scheduledShutdownAt: new Date(Date.now() + SHUTDOWN_DELAY_MS).toISOString()
+    });
 });
 
 router.delete("/:sandboxId", async (req: Request, res: Response) => {

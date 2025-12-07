@@ -20,9 +20,16 @@ export default function AuthCallback() {
         if (token && userParam) {
             try {
                 const user = JSON.parse(userParam)
-                localStorage.setItem("token", token)
+                localStorage.setItem("auth_token", token)
                 localStorage.setItem("user", JSON.stringify(user))
-                router.push("/")
+
+                // Check for pending prompt
+                const pendingPrompt = localStorage.getItem("pendingPrompt")
+                if (pendingPrompt) {
+                    router.push("/project")
+                } else {
+                    router.push("/")
+                }
             } catch {
                 router.push("/login?error=invalid_response")
             }
@@ -32,7 +39,7 @@ export default function AuthCallback() {
     }, [router, searchParams])
 
     return (
-        <div className="flex min-h-screen items-center justify-center">
+        <div className="flex min-h-screen items-center justify-center bg-[#1D1D1D]">
             <div className="text-white">Signing in...</div>
         </div>
     )

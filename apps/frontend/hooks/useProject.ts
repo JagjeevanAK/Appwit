@@ -1,6 +1,7 @@
 "use client";
 
 import { useState, useEffect } from "react";
+import { BackendUrl } from "@/config";
 
 interface Project {
     id: string;
@@ -43,7 +44,7 @@ export function useProject(projectId: string) {
                 }
 
                 const response = await fetch(
-                    `${process.env.NEXT_PUBLIC_BACKEND_URL}/project/${projectId}`,
+                    `${BackendUrl}/project/${projectId}`,
                     {
                         headers: {
                             "Authorization": `Bearer ${token}`
@@ -52,6 +53,8 @@ export function useProject(projectId: string) {
                 );
 
                 if (!response.ok) {
+                    const errorText = await response.text();
+                    console.error("Load project failed:", response.status, errorText);
                     throw new Error("Failed to load project");
                 }
 

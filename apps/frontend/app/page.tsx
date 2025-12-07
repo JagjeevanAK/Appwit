@@ -16,7 +16,9 @@ export default function Home() {
             localStorage.setItem('pendingPrompt', prompt);
             router.push('/signup');
         } else {
-            router.push(`/projects?prompt=${encodeURIComponent(prompt)}`);
+            // Store prompt and navigate to project creation
+            localStorage.setItem('pendingPrompt', prompt);
+            router.push('/project');
         }
     };
 
