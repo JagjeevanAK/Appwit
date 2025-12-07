@@ -14,4 +14,11 @@ RUN cd /tmp && \
     rm -rf /tmp/vite-app && \
     cd /home/user && npm install
 
-RUN echo "import { defineConfig } from 'vite'\nimport react from '@vitejs/plugin-react'\n\nexport default defineConfig({\n  plugins: [react()],\n  server: {\n    host: true, allowedHosts: true }\n})" > vite.config.ts
+# Install Tailwind CSS with Vite plugin
+RUN npm install tailwindcss @tailwindcss/vite
+
+# Configure Vite with React and Tailwind plugins
+RUN echo "import { defineConfig } from 'vite'\nimport react from '@vitejs/plugin-react'\nimport tailwindcss from '@tailwindcss/vite'\n\nexport default defineConfig({\n  plugins: [react(), tailwindcss()],\n  server: {\n    host: true, allowedHosts: true }\n})" > vite.config.ts
+
+# Configure CSS to use Tailwind
+RUN echo '@import "tailwindcss";' > src/index.css
