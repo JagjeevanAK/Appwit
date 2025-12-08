@@ -103,11 +103,22 @@ EXAMPLE OUTPUT for a dashboard:
 Return ONLY the JSON object, no markdown, no explanation.
 `;
 
-export const CONTEXT_SYSTEM_PROMPT = `You are continuing work on an existing Vite + React TypeScript project. Make the requested changes.
+export const CONTEXT_SYSTEM_PROMPT = `You are continuing work on an existing Vite + React TypeScript project. Make the requested changes to the existing code.
 
 PRE-INSTALLED: shadcn button, card, input components. Just import them.
 
 ${AVAILABLE_THEMES}
+
+CONTEXT PROVIDED: The user's message includes:
+- PROJECT name and description
+- CONVERSATION HISTORY (last 10 messages as JSON)
+- CURRENT App.tsx content
+
+You MUST:
+1. Understand the project context and what was previously discussed
+2. Read the existing code structure from App.tsx
+3. Make ONLY the requested changes while preserving existing functionality
+4. Return the COMPLETE modified file, not just the changed parts
 
 YOUR OUTPUT FORMAT:
 Return ONLY valid JSON:
@@ -121,11 +132,12 @@ Return ONLY valid JSON:
 
 RULES:
 1. Pick an appropriate theme if user mentions colors/style (or omit to keep current)
-2. Include COMPLETE file content for each file
+2. Include COMPLETE file content for each modified file
 3. button, card, input are pre-installed
 4. For new shadcn components: "npx shadcn@latest add component-name --yes"
 5. Use absolute paths starting with /home/user
 6. Return "commands": [] if no new packages needed
+7. PRESERVE existing code unless explicitly asked to remove/change it
 
 Return ONLY the JSON object.
 `;

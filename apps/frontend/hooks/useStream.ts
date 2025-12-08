@@ -3,7 +3,7 @@ import { BackendUrl } from "@/config";
 import { useState, useRef, useCallback } from "react";
 
 interface StreamEvent {
-    type: 'text' | 'tool_call' | 'tool_result' | 'done' | 'error' | 'plan' | 'worker_start' | 'worker_complete' | 'review_start' | 'review_complete';
+    type: 'text' | 'tool_call' | 'tool_result' | 'done' | 'error' | 'plan' | 'worker_start' | 'worker_complete' | 'review_start' | 'review_complete' | 'summary';
     content?: string;
     name?: string;
     args?: Record<string, unknown>;
@@ -176,6 +176,11 @@ export function useStream(projectId: string) {
                         case 'review_complete':
                             console.log('Review complete:', event.review);
                             break;
+                        case 'summary':
+                            if (event.message) {
+                                setData(event.message);
+                            }
+                            break;
                         case 'done':
                             if (event.sandboxUrl) setSandboxUrl(event.sandboxUrl);
                             if (event.sandboxId) setSandboxId(event.sandboxId);
@@ -214,11 +219,17 @@ export function useStream(projectId: string) {
         try {
             abortController.current = new AbortController();
 
+            const token = localStorage.getItem("auth_token");
+            if (!token) {
+                throw new Error("Not authenticated");
+            }
+
             const response = await fetch(`${BackendUrl}/prompt/continue`, {
                 method: "POST",
                 body: JSON.stringify({ prompt, sandboxId: existingSandboxId }),
                 headers: {
                     "Content-Type": "application/json",
+                    "Authorization": `Bearer ${token}`
                 },
                 signal: abortController.current.signal,
             });
@@ -279,6 +290,11 @@ export function useStream(projectId: string) {
                                     action: 'update',
                                     path: event.file!
                                 }]);
+                            }
+                            break;
+                        case 'summary':
+                            if (event.message) {
+                                setData(event.message);
                             }
                             break;
                         case 'done':

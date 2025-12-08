@@ -17,6 +17,59 @@ const router = Router();
 const TEMPLATE_ID = process.env.TEMPLATE_ID;
 const SANDBOX_PORT = process.env.SANDBOX_PORT;
 
+function generateCodeSummary(files: string[], commandCount: number, action: 'created' | 'updated'): string {
+    if (files.length === 0) {
+        return action === 'created'
+            ? "I've set up your project! Let me know what changes you'd like to make."
+            : "I've reviewed your request but no changes were needed.";
+    }
+
+    // Determine what kind of work was done based on file types
+    const fileNames = files.map(f => f.split('/').pop() || f);
+    const hasComponents = files.some(f => f.includes('/components/') || f.includes('Component'));
+    const hasStyles = files.some(f => f.endsWith('.css') || f.endsWith('.scss'));
+    const hasApp = files.some(f => f.includes('App.tsx') || f.includes('App.jsx'));
+    const hasPages = files.some(f => f.includes('/pages/') || f.includes('/app/'));
+
+    if (action === 'created') {
+        // Initial project creation
+        let summary = "I've created your project";
+
+        if (hasApp && hasComponents) {
+            summary += " with the main app and components";
+        } else if (hasApp) {
+            summary += " with the main application";
+        } else if (hasComponents) {
+            summary += " with the necessary components";
+        }
+
+        if (commandCount > 0) {
+            summary += " and installed the dependencies";
+        }
+
+        summary += ". Let me know what changes you'd like!";
+        return summary;
+    } else {
+        // Updates/iterations
+        let summary = "Done! I've updated";
+
+        if (hasStyles && !hasComponents && !hasApp) {
+            summary += " the styling";
+        } else if (hasComponents && files.length === 1) {
+            summary += ` the ${fileNames[0]?.replace('.tsx', '').replace('.jsx', '')} component`;
+        } else if (hasApp && files.length === 1) {
+            summary += " the main app";
+        } else if (files.length <= 2) {
+            summary += ` ${fileNames.join(' and ')}`;
+        } else {
+            summary += ` ${files.length} files including ${fileNames.slice(0, 2).join(', ')}`;
+        }
+
+        summary += " as requested. Anything else you'd like me to change?";
+        return summary;
+    }
+}
+
 
 async function getOrCreateChat(projectId: string): Promise<string> {
     let chat = await prisma.chat.findFirst({
@@ -160,7 +213,8 @@ router.post("/", async (req: AuthRequest, res: Response) => {
             sandboxUrl,
             projectId,
             chatId,
-            userId
+            userId,
+            createdAt: new Date()
         });
 
         console.log(`Sandbox created: ${sandboxUrl}, ID: ${sandboxId}${projectId ? `, Project: ${projectId}` : ''}`);
@@ -181,19 +235,33 @@ router.post("/", async (req: AuthRequest, res: Response) => {
             const systemPromptToUse = isFirst ? INITIAL_SYSTEM_PROMPT : CONTEXT_SYSTEM_PROMPT;
             console.log(`Using ${isFirst ? 'INITIAL' : 'CONTEXT'} system prompt for orchestrator`);
 
+            // Track created files for summary generation
+            const createdFiles: string[] = [];
+            let commandCount = 0;
+
             for await (const event of streamMultiAgentOrchestrator(sandbox, prompt, systemPromptToUse)) {
+                // Track file creation events
+                if (event.type === 'file_created' && event.filePath) {
+                    createdFiles.push(event.filePath);
+                }
+                if (event.type === 'executing') {
+                    commandCount++;
+                }
                 res.write(`data: ${JSON.stringify(event)}\n\n`);
             }
 
             // Mark streaming as complete
             session.isStreaming = false;
 
+            // Generate meaningful summary
+            const summary = generateCodeSummary(createdFiles, commandCount, isFirst ? 'created' : 'updated');
+
             // Save assistant response to database
             if (session.chatId) {
-                const summary = "Code generation completed successfully";
                 await saveMessage(session.chatId, MessageRole.ASSISTANT, summary, summary);
             }
 
+            res.write(`data: ${JSON.stringify({ type: 'summary', message: summary })}\n\n`);
             res.write(`data: ${JSON.stringify({ type: 'done', sandboxUrl, sandboxId })}\n\n`);
             res.end();
         } catch (orchestratorError) {
@@ -210,6 +278,22 @@ router.post("/", async (req: AuthRequest, res: Response) => {
         }
     }
 });
+
+/**
+ * Reads the main App.tsx file from the sandbox to provide context for the LLM
+ * Only reads App.tsx as it's the primary file that gets customized
+ */
+async function getCurrentProjectContext(sandbox: import("e2b").Sandbox): Promise<string> {
+    try {
+        const appContent = await sandbox.files.read('/home/user/src/App.tsx');
+        if (appContent && typeof appContent === 'string') {
+            return `\n\nCURRENT App.tsx:\n\`\`\`tsx\n${appContent}\n\`\`\``;
+        }
+    } catch {
+        // App.tsx might not exist yet
+    }
+    return '';
+}
 
 router.post("/continue", async (req: AuthRequest, res: Response) => {
     const { prompt, sandboxId } = req.body;
@@ -242,20 +326,71 @@ router.post("/continue", async (req: AuthRequest, res: Response) => {
             // Mark session as streaming
             session.isStreaming = true;
 
+            // Get current project context (existing App.tsx)
+            console.log(`[Continue] Reading current project context...`);
+            const projectContext = await getCurrentProjectContext(session.sandbox);
+
+            // Get conversation history (last 10 messages) in JSON format
+            let conversationContext = '';
+            if (session.chatId) {
+                const messages = await prisma.message.findMany({
+                    where: { chatId: session.chatId },
+                    orderBy: { createdAt: 'desc' },
+                    take: 10,
+                    select: { role: true, content: true, summary: true }
+                });
+                if (messages.length > 0) {
+                    const history = messages.reverse().map(m => ({
+                        role: m.role,
+                        content: m.summary || m.content.slice(0, 200)
+                    }));
+                    conversationContext = `\n\nCONVERSATION HISTORY:\n${JSON.stringify(history, null, 2)}`;
+                }
+            }
+
+            // Get project description
+            let projectDescription = '';
+            if (session.projectId) {
+                const project = await prisma.project.findUnique({
+                    where: { id: session.projectId },
+                    select: { name: true, description: true }
+                });
+                if (project) {
+                    projectDescription = `\n\nPROJECT: ${project.name}${project.description ? `\nDescription: ${project.description}` : ''}`;
+                }
+            }
+
+            // Track created/modified files for summary generation
+            const modifiedFiles: string[] = [];
+            let commandCount = 0;
+
+            // Build enhanced prompt with full context
+            const enhancedPrompt = `${prompt}${projectDescription}${conversationContext}${projectContext}`;
+
             // Use CONTEXT_SYSTEM_PROMPT for iterative changes
-            for await (const event of streamMultiAgentOrchestrator(session.sandbox, prompt, CONTEXT_SYSTEM_PROMPT)) {
+            for await (const event of streamMultiAgentOrchestrator(session.sandbox, enhancedPrompt, CONTEXT_SYSTEM_PROMPT)) {
+                // Track file creation events
+                if (event.type === 'file_created' && event.filePath) {
+                    modifiedFiles.push(event.filePath);
+                }
+                if (event.type === 'executing') {
+                    commandCount++;
+                }
                 res.write(`data: ${JSON.stringify(event)}\n\n`);
             }
 
             // Mark streaming as complete
             session.isStreaming = false;
 
+            // Generate meaningful summary
+            const summary = generateCodeSummary(modifiedFiles, commandCount, 'updated');
+
             // Save assistant response to database
             if (session.chatId) {
-                const summary = "Code changes completed successfully";
                 await saveMessage(session.chatId, MessageRole.ASSISTANT, summary, summary);
             }
 
+            res.write(`data: ${JSON.stringify({ type: 'summary', message: summary })}\n\n`);
             res.write(`data: ${JSON.stringify({ type: 'done', sandboxUrl: session.sandboxUrl, sandboxId })}\n\n`);
             res.end();
 
@@ -339,8 +474,47 @@ router.post("/load/:projectId", async (req: AuthRequest, res: Response) => {
         for (const [sandboxId, session] of activeSandboxes) {
             if (session.projectId === projectId) {
                 console.log(`[LOAD] Found existing sandbox ${sandboxId} for project ${projectId}`);
+
+                // If sandbox is shutting down, it cannot be reused
+                if (session.isShuttingDown) {
+                    console.log(`[LOAD] Sandbox ${sandboxId} is shutting down, returning status to frontend`);
+                    return res.status(409).json({
+                        error: 'Project is being backed up',
+                        status: 'backing_up',
+                        message: 'Please wait while your project is being saved...'
+                    });
+                }
+
                 // Cancel any pending shutdown
                 cancelPendingShutdown(sandboxId);
+
+                // If backup is in progress, wait for it to complete
+                if (session.isBackingUp) {
+                    console.log(`[LOAD] Backup in progress for ${sandboxId}, waiting for completion...`);
+                    let waitTime = 0;
+                    const maxWaitTime = 120000; // 2 minutes max wait
+                    const pollInterval = 1000; // 1 second
+
+                    while (session.isBackingUp && waitTime < maxWaitTime) {
+                        await new Promise(resolve => setTimeout(resolve, pollInterval));
+                        waitTime += pollInterval;
+                    }
+
+                    if (session.isBackingUp) {
+                        console.log(`[LOAD] Backup still in progress after ${maxWaitTime / 1000}s, proceeding anyway`);
+                    } else {
+                        console.log(`[LOAD] Backup completed, continuing with load`);
+                    }
+                }
+
+                // Extend sandbox timeout since user is back
+                try {
+                    await session.sandbox.setTimeout(15 * 60 * 1000); // 15 minutes
+                    console.log(`[LOAD] Extended sandbox timeout to 15 minutes`);
+                } catch (timeoutErr) {
+                    console.warn(`[LOAD] Could not extend sandbox timeout:`, timeoutErr);
+                }
+
                 return res.json({
                     sandboxId,
                     sandboxUrl: session.sandboxUrl,
@@ -402,7 +576,8 @@ router.post("/load/:projectId", async (req: AuthRequest, res: Response) => {
             sandboxUrl,
             projectId,
             chatId,
-            userId
+            userId,
+            createdAt: new Date()
         });
 
         console.log(`[LOAD] Sandbox ${sandboxId} ready for project ${projectId}`);
@@ -479,6 +654,36 @@ router.post("/notify-leaving/:sandboxId", async (req: Request, res: Response) =>
         success: true,
         message: `Sandbox shutdown scheduled in ${SHUTDOWN_DELAY_MS / 1000} seconds`,
         scheduledShutdownAt: new Date(Date.now() + SHUTDOWN_DELAY_MS).toISOString()
+    });
+});
+
+// Get project backup status (for frontend to check if project can be opened)
+router.get("/status/:projectId", async (req: Request, res: Response) => {
+    const projectId = req.params.projectId;
+
+    if (!projectId) {
+        return res.status(400).json({ error: 'projectId is required' });
+    }
+
+    // Check if any sandbox for this project is shutting down
+    for (const [sandboxId, session] of activeSandboxes) {
+        if (session.projectId === projectId) {
+            if (session.isShuttingDown || session.isBackingUp) {
+                return res.json({
+                    status: 'backing_up',
+                    message: 'Project is being backed up...'
+                });
+            }
+            return res.json({
+                status: 'active',
+                message: 'Project is active'
+            });
+        }
+    }
+
+    return res.json({
+        status: 'ready',
+        message: 'Project is ready to load'
     });
 });
 
