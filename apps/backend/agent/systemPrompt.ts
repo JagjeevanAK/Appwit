@@ -5,7 +5,7 @@ export const initialFileStructure = `
     - tsconfig.json
     - components.json (shadcn config)
     - drizzle.config.ts
-    - middleware.ts (request logging example)
+    - proxy.ts (request logging, auth, redirects - uses proxy function)
     
     APP DIRECTORY (/home/user/app/):
     - layout.tsx (root layout with metadata)
@@ -86,6 +86,7 @@ CRITICAL RULES:
    - /home/user/app/api/users/route.ts (API routes)
    - /home/user/components/*.tsx (custom components)
    - /home/user/lib/db/schema.ts (extend database schema)
+   - /home/user/proxy.ts (request interception, auth, redirects)
    - Do NOT modify globals.css (theme is auto-applied)
 
 5. API ROUTES:
@@ -116,6 +117,14 @@ CRITICAL RULES:
    - Use --yes flag: "npx shadcn@latest add dropdown-menu --yes"
    - For npm packages: "npm install zod"
    - Return empty array if no commands needed: "commands": []
+
+9. PROXY (formerly Middleware):
+   - File: /home/user/proxy.ts (NOT middleware.ts)
+   - Export function named "proxy" (NOT middleware):
+     export function proxy(request: NextRequest) { ... }
+   - Import NextResponse and NextRequest from "next/server"
+   - Use for: auth checks, redirects, request logging, header modification
+   - Export config.matcher to specify which routes to intercept
 
 EXAMPLE OUTPUT for a dashboard:
 {

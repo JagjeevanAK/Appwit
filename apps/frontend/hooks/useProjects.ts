@@ -34,6 +34,13 @@ export function useProjects() {
                 }
             });
 
+            // Handle auth errors gracefully - don't throw, just return empty projects
+            if (response.status === 401 || response.status === 403) {
+                setProjects([]);
+                setLoading(false);
+                return;
+            }
+
             if (!response.ok) {
                 throw new Error("Failed to fetch projects");
             }

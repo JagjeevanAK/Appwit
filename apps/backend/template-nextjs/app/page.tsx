@@ -15,7 +15,9 @@ export default function Home() {
                     <p className="text-muted-foreground">
                         Start editing <code className="bg-muted px-1 rounded">app/page.tsx</code> to build your application.
                     </p>
-                    <Button className="w-full">Get Started</Button>
+                    <Button className="w-full bg-black text-white hover:bg-black/90">
+                        Get Started
+                    </Button>
                 </CardContent>
             </Card>
         </div>

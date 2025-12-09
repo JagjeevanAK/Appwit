@@ -183,10 +183,27 @@ export async function scheduleShutdown(sandboxId: string, projectId: string, use
             }
         }
 
-        // Perform backup
+        // Perform backup (may return early if already in progress)
         await performBackup(sandboxId, projectId, userId);
 
-        // Kill immediately after backup
+        // Wait for any in-progress backup to complete before killing
+        const sessionBeforeKill = activeSandboxes.get(sandboxId);
+        if (sessionBeforeKill?.isBackingUp) {
+            console.log(`[SHUTDOWN] Waiting for in-progress backup to complete...`);
+            let waitTime = 0;
+            const maxWait = 120000; // 2 minutes max
+            while (sessionBeforeKill.isBackingUp && waitTime < maxWait) {
+                await new Promise(resolve => setTimeout(resolve, 1000));
+                waitTime += 1000;
+            }
+            if (sessionBeforeKill.isBackingUp) {
+                console.log(`[SHUTDOWN] Backup still running after ${maxWait / 1000}s, proceeding with kill anyway`);
+            } else {
+                console.log(`[SHUTDOWN] Backup completed, proceeding with kill`);
+            }
+        }
+
+        // Kill after backup is complete
         await performKill(sandboxId);
 
         console.log(`[SHUTDOWN] ✓ Shutdown complete for sandbox ${sandboxId}`);
