@@ -1,27 +1,17 @@
 import { StateGraph, Annotation, START, END, type LangGraphRunnableConfig } from "@langchain/langgraph";
-import { ChatOpenAI } from "@langchain/openai";
 import { HumanMessage, SystemMessage } from "@langchain/core/messages";
 import type { Sandbox } from "e2b";
 import { INITIAL_SYSTEM_PROMPT } from "./systemPrompt";
 import { CodeGenerationSchema } from "./types";
 import type { FileContent, CodeGeneration } from "./types";
 import { getThemeCSS } from "../data/themes";
+import { createLLM } from "./llmFactory";
 
 const log = {
     codegen: (msg: string, ...args: unknown[]) => console.log(`\x1b[36m[CODEGEN]\x1b[0m ${msg}`, ...args),
     commands: (msg: string, ...args: unknown[]) => console.log(`\x1b[35m[COMMANDS]\x1b[0m ${msg}`, ...args),
     writer: (file: string, msg: string, ...args: unknown[]) => console.log(`\x1b[33m[WRITER ${file}]\x1b[0m ${msg}`, ...args),
     orchestrator: (msg: string, ...args: unknown[]) => console.log(`\x1b[32m[ORCHESTRATOR]\x1b[0m ${msg}`, ...args),
-};
-
-const createModel = () => {
-    return new ChatOpenAI({
-        model: "anthropic/claude-sonnet-4.5",
-        configuration: {
-            baseURL: "https://openrouter.ai/api/v1",
-            apiKey: process.env.OPENROUTER_API_KEY,
-        },
-    });
 };
 
 const GraphState = Annotation.Root({
@@ -54,7 +44,7 @@ async function coderNode(state: GraphStateType, config?: StreamConfig): Promise<
     config?.configurable?.streamCallback?.({ type: 'generating', message: 'Generating code...' });
 
     const startTime = Date.now();
-    const structuredModel = createModel().withStructuredOutput(CodeGenerationSchema);
+    const structuredModel = createLLM().withStructuredOutput(CodeGenerationSchema);
     const systemPromptToUse = state.systemPrompt || INITIAL_SYSTEM_PROMPT;
 
     let result: CodeGeneration;
@@ -106,7 +96,6 @@ function createThemeApplicatorNode(sandbox: Sandbox) {
                 return {};
             }
 
-            // Write theme CSS directly to globals.css
             await sandbox.files.write('/home/user/app/globals.css', themeCSS);
             log_theme(`Theme "${themeName}" applied to globals.css`);
             config?.configurable?.streamCallback?.({ type: 'completed', message: `Theme "${themeName}" applied` });
