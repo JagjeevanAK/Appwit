@@ -10,6 +10,12 @@ const DEFAULT_MODELS: Record<LLMProvider, string> = {
     openai: 'gpt-4o',
 };
 
+const MODEL_ENV_VARS: Record<LLMProvider, string> = {
+    openrouter: 'OPENROUTER_MODEL',
+    anthropic: 'ANTHROPIC_MODEL',
+    openai: 'OPENAI_MODEL',
+};
+
 export class LLMFactory {
     private static instance: LLMFactory | null = null;
 
@@ -34,7 +40,8 @@ export class LLMFactory {
     }
 
     private resolveModel(): string {
-        return process.env.LLM_MODEL || DEFAULT_MODELS[this.provider];
+        const envVar = MODEL_ENV_VARS[this.provider];
+        return process.env[envVar] || DEFAULT_MODELS[this.provider];
     }
 
     public getProviderName(): LLMProvider {
