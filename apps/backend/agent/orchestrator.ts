@@ -1,218 +1,26 @@
-import { StateGraph, Annotation, START, END, type LangGraphRunnableConfig } from "@langchain/langgraph";
-import { HumanMessage, SystemMessage } from "@langchain/core/messages";
+// Main orchestrator - sets up the graph and exports run/stream functions
+
+import { StateGraph, START, END } from "@langchain/langgraph";
 import type { Sandbox } from "e2b";
-import { INITIAL_SYSTEM_PROMPT } from "./systemPrompt";
-import { CodeGenerationSchema } from "./types";
-import type { FileContent, CodeGeneration } from "./types";
-import { getThemeCSS } from "../data/themes";
-import { createLLM } from "./llmFactory";
+import { INITIAL_SYSTEM_PROMPT } from "./systemPrompts";
+import type { FileContent, Plan, ReviewResult } from "./types";
 
-const log = {
-    codegen: (msg: string, ...args: unknown[]) => console.log(`\x1b[36m[CODEGEN]\x1b[0m ${msg}`, ...args),
-    commands: (msg: string, ...args: unknown[]) => console.log(`\x1b[35m[COMMANDS]\x1b[0m ${msg}`, ...args),
-    writer: (file: string, msg: string, ...args: unknown[]) => console.log(`\x1b[33m[WRITER ${file}]\x1b[0m ${msg}`, ...args),
-    orchestrator: (msg: string, ...args: unknown[]) => console.log(`\x1b[32m[ORCHESTRATOR]\x1b[0m ${msg}`, ...args),
-};
+// Import all nodes from modular files
+import {
+    GraphState,
+    type StreamEvent,
+    log,
+    plannerNode,
+    coderNode,
+    createThemeApplicatorNode,
+    createCommandHandlerNode,
+    createWriterNode,
+    reviewerNode,
+    shouldRetry
+} from "./nodes";
 
-const GraphState = Annotation.Root({
-    prompt: Annotation<string>(),
-    systemPrompt: Annotation<string>(),
-    theme: Annotation<string | undefined>(),
-    files: Annotation<FileContent[]>(),
-    commands: Annotation<string[]>(),
-    writtenFiles: Annotation<string[]>(),
-});
-
-type GraphStateType = typeof GraphState.State;
-
-interface StreamConfig extends LangGraphRunnableConfig {
-    configurable?: {
-        streamCallback?: (event: StreamEvent) => void;
-    };
-}
-
-export interface StreamEvent {
-    type: 'generating' | 'file_started' | 'file_created' | 'executing' | 'stdout' | 'stderr' | 'completed' | 'error' | 'done';
-    message?: string;
-    filePath?: string;
-}
-
-async function coderNode(state: GraphStateType, config?: StreamConfig): Promise<Partial<GraphStateType>> {
-    log.codegen('Generating code and commands...');
-    log.codegen('Prompt:', state.prompt.slice(0, 100) + (state.prompt.length > 100 ? '...' : ''));
-
-    config?.configurable?.streamCallback?.({ type: 'generating', message: 'Generating code...' });
-
-    const startTime = Date.now();
-    const structuredModel = createLLM().withStructuredOutput(CodeGenerationSchema);
-    const systemPromptToUse = state.systemPrompt || INITIAL_SYSTEM_PROMPT;
-
-    let result: CodeGeneration;
-    try {
-        result = await structuredModel.invoke([
-            new SystemMessage(systemPromptToUse),
-            new HumanMessage(state.prompt)
-        ]);
-    } catch (error) {
-        log.codegen('Structured output failed:', error);
-        throw new Error('Code generation failed');
-    }
-
-    if (!result?.files?.length) {
-        throw new Error('No files generated');
-    }
-
-    const duration = ((Date.now() - startTime) / 1000).toFixed(1);
-    log.codegen(`Generated ${result.files.length} files and ${result.commands?.length || 0} commands in ${duration}s`);
-    result.files.forEach(f => log.codegen(`  📄 ${f.filePath}`));
-    result.commands?.forEach(c => log.commands(`  ⚡ ${c}`));
-
-    return {
-        theme: result.theme,
-        files: result.files,
-        commands: result.commands || []
-    };
-}
-
-const log_theme = (msg: string, ...args: unknown[]) => console.log(`\x1b[34m[THEME]\x1b[0m ${msg}`, ...args);
-
-function createThemeApplicatorNode(sandbox: Sandbox) {
-    return async (state: GraphStateType, config?: StreamConfig): Promise<Partial<GraphStateType>> => {
-        const themeName = state.theme;
-
-        if (!themeName) {
-            log_theme('No theme specified, using default');
-            return {};
-        }
-
-        log_theme(`Applying theme: ${themeName}`);
-        config?.configurable?.streamCallback?.({ type: 'executing', message: `Applying theme: ${themeName}` });
-
-        try {
-            const themeCSS = getThemeCSS(themeName);
-
-            if (!themeCSS) {
-                log_theme(`Theme "${themeName}" not found, skipping`);
-                return {};
-            }
-
-            await sandbox.files.write('/home/user/app/globals.css', themeCSS);
-            log_theme(`Theme "${themeName}" applied to globals.css`);
-            config?.configurable?.streamCallback?.({ type: 'completed', message: `Theme "${themeName}" applied` });
-
-        } catch (error) {
-            const errorMessage = error instanceof Error ? error.message : String(error);
-            log_theme(`Error applying theme: ${errorMessage}`);
-            config?.configurable?.streamCallback?.({ type: 'error', message: `Failed to apply theme` });
-        }
-
-        return {};
-    };
-}
-
-function createCommandHandlerNode(sandbox: Sandbox) {
-    return async (state: GraphStateType, config?: StreamConfig): Promise<Partial<GraphStateType>> => {
-        const commands = state.commands || [];
-
-        if (commands.length === 0) {
-            log.commands('No commands to execute');
-            return {};
-        }
-
-        log.commands(`Running ${commands.length} commands sequentially...`);
-
-        for (let i = 0; i < commands.length; i++) {
-            const cmd = commands[i];
-            if (!cmd) continue;
-
-            const cmdNum = i + 1;
-            log.commands(`[${cmdNum}/${commands.length}] ${cmd}`);
-
-            config?.configurable?.streamCallback?.({ type: 'executing', message: `Running: ${cmd}` });
-
-            try {
-                const cmdToRun = `yes | ${cmd}`;
-                log.commands(`Running: ${cmdToRun}`);
-
-                const result = await sandbox.commands.run(cmdToRun, {
-                    cwd: '/home/user',
-                    timeoutMs: 120_000, // 2 min timeout for npm installs
-                });
-
-                if (result.stdout) {
-                    log.commands(`stdout: ${result.stdout.slice(0, 200)}`);
-                    config?.configurable?.streamCallback?.({ type: 'stdout', message: result.stdout });
-                }
-                if (result.stderr) {
-                    log.commands(`stderr: ${result.stderr.slice(0, 200)}`);
-                    config?.configurable?.streamCallback?.({ type: 'stderr', message: result.stderr });
-                }
-
-                if (result.exitCode !== 0) {
-                    log.commands(`Command failed with exit code ${result.exitCode}`);
-                    config?.configurable?.streamCallback?.({ type: 'error', message: `Command failed: ${cmd}` });
-                    // Continue with other commands even if one fails
-                }
-
-                config?.configurable?.streamCallback?.({ type: 'completed', message: `Completed: ${cmd}` });
-            } catch (error) {
-                const errorMessage = error instanceof Error ? error.message : String(error);
-                log.commands(`Command error: ${errorMessage}`);
-                config?.configurable?.streamCallback?.({ type: 'error', message: `Error: ${errorMessage}` });
-            }
-        }
-
-        log.commands('All commands executed');
-        return { commands: [] }; // Clear commands after execution
-    };
-}
-
-function createWriterNode(sandbox: Sandbox) {
-    return async (state: GraphStateType, config?: StreamConfig): Promise<Partial<GraphStateType>> => {
-        const { files } = state;
-
-        if (!files || files.length === 0) {
-            log.orchestrator('No files to write');
-            return { writtenFiles: [] };
-        }
-
-        log.orchestrator(`Writing ${files.length} files...`);
-        const writtenFiles: string[] = [];
-
-        for (let i = 0; i < files.length; i++) {
-            const file = files[i];
-            if (!file) continue;
-
-            const fileNum = i + 1;
-            log.writer(file.filePath, `Writing [${fileNum}/${files.length}]`);
-
-            config?.configurable?.streamCallback?.({ type: 'file_started', filePath: file.filePath, message: `Writing ${file.filePath}...` });
-
-            try {
-                // Create directory if needed
-                const dir = file.filePath.substring(0, file.filePath.lastIndexOf('/'));
-                if (dir) {
-                    await sandbox.commands.run(`mkdir -p ${dir}`);
-                }
-
-                // Write file
-                await sandbox.files.write(file.filePath, file.content);
-
-                log.writer(file.filePath, 'Done');
-                writtenFiles.push(file.filePath);
-
-                config?.configurable?.streamCallback?.({ type: 'file_created', filePath: file.filePath, message: `Created ${file.filePath}` });
-            } catch (error) {
-                const errorMessage = error instanceof Error ? error.message : String(error);
-                log.writer(file.filePath, `Failed: ${errorMessage}`);
-                config?.configurable?.streamCallback?.({ type: 'error', message: `Failed to write ${file.filePath}` });
-            }
-        }
-
-        log.orchestrator(`Written ${writtenFiles.length}/${files.length} files`);
-        return { writtenFiles };
-    };
-}
+// Re-export StreamEvent for external use
+export type { StreamEvent };
 
 function createGraph(sandbox: Sandbox) {
     const themeApplicator = createThemeApplicatorNode(sandbox);
@@ -220,15 +28,25 @@ function createGraph(sandbox: Sandbox) {
     const writer = createWriterNode(sandbox);
 
     const graph = new StateGraph(GraphState)
+        // Nodes
+        .addNode("planner", plannerNode)
         .addNode("codegen", coderNode)
         .addNode("themeApplicator", themeApplicator)
         .addNode("commandHandler", commandHandler)
         .addNode("writer", writer)
-        .addEdge(START, "codegen")
+        .addNode("reviewer", reviewerNode)
+        // Edges - flow with planner and reviewer
+        .addEdge(START, "planner")
+        .addEdge("planner", "codegen")
         .addEdge("codegen", "themeApplicator")
         .addEdge("themeApplicator", "commandHandler")
         .addEdge("commandHandler", "writer")
-        .addEdge("writer", END);
+        .addEdge("writer", "reviewer")
+        // Conditional edge for retry logic
+        .addConditionalEdges("reviewer", shouldRetry, {
+            "codegen": "codegen",
+            "__end__": END
+        });
 
     return graph.compile();
 }
@@ -265,7 +83,7 @@ export async function* streamOrchestrator(
 
     const graph = createGraph(sandbox);
 
-    yield { type: 'generating', message: 'Starting code generation...' };
+    yield { type: 'planning', message: 'Analyzing your request...' };
 
     try {
         const stream = graph.streamEvents(
@@ -274,11 +92,20 @@ export async function* streamOrchestrator(
         );
 
         let files: FileContent[] = [];
-        const emittedWriteStarts = new Set<string>();
         const emittedWriteCompletes = new Set<string>();
 
         for await (const event of stream) {
             if (event.event === "on_chain_end") {
+                // Planner completed
+                if (event.name === "planner" && event.data?.output?.plan) {
+                    const plan = event.data.output.plan as Plan;
+                    yield {
+                        type: 'plan_complete',
+                        message: `Plan created: ${plan.tasks.length} files to generate`,
+                        plan
+                    };
+                }
+
                 // Codegen completed
                 if (event.name === "codegen" && event.data?.output?.files) {
                     files = event.data.output.files as FileContent[];
@@ -302,6 +129,23 @@ export async function* streamOrchestrator(
                         }
                     }
                 }
+
+                // Reviewer completed
+                if (event.name === "reviewer" && event.data?.output?.reviewResult) {
+                    const result = event.data.output.reviewResult as ReviewResult;
+                    yield {
+                        type: 'review_complete',
+                        message: result.status === 'success'
+                            ? 'All tasks completed'
+                            : `Issues found: ${result.problems?.length || 0}`,
+                        reviewResult: result
+                    };
+
+                    // If retrying, emit retrying event
+                    if (result.status === 'issues' && event.data?.output?.retryCount === 1) {
+                        yield { type: 'retrying', message: 'Regenerating missing files...' };
+                    }
+                }
             }
         }
 
@@ -315,6 +159,6 @@ export async function* streamOrchestrator(
     }
 }
 
-// Legacy alias for backward compatibility
+// Legacy aliases for backward compatibility
 export const streamMultiAgentOrchestrator = streamOrchestrator;
 export const runMultiAgentOrchestrator = runOrchestrator;

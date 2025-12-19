@@ -1,41 +1,6 @@
-export const initialFileStructure = `
-    PROJECT ROOT (/home/user/):
-    - package.json (Next.js 15, Drizzle ORM, shadcn/ui)
-    - next.config.ts
-    - tsconfig.json
-    - components.json (shadcn config)
-    - drizzle.config.ts
-    - middleware.ts (request logging, auth, redirects)
-    
-    APP DIRECTORY (/home/user/app/):
-    - layout.tsx (root layout with metadata)
-    - page.tsx (home page)
-    - globals.css (@import "tailwindcss" ready)
-    - api/hello/route.ts (example API route)
-    
-    COMPONENTS (/home/user/components/ui/):
-    - button.tsx, card.tsx, input.tsx (pre-installed)
-    - dialog.tsx, tabs.tsx, avatar.tsx (pre-installed)
-    
-    LIB DIRECTORY (/home/user/lib/):
-    - utils.ts (cn function for Tailwind)
-    - db/index.ts (Drizzle connection)
-    - db/schema.ts (database schema)
-`;
+// Initial system prompt for new project creation
 
-export const AVAILABLE_THEMES = `
-AVAILABLE THEMES (choose one):
-- "vercel" - Vercel's black & white, ultra-minimal, developer-focused
-- "twitter" - Twitter/X bright blue, social media aesthetic
-- "darkmatter" - Developer-focused with monospace fonts, orange/amber primary
-- "caffeine" - Warm coffee-inspired, brown/amber colors
-- "claymorphism" - Soft clay-like 3D aesthetic, purple, playful
-- "graphite" - Minimalist grayscale, professional, sharp edges
-- "mocha-mousse" - Pantone 2025 warm cocoa, cozy and inviting
-- "elegant-luxury" - Premium burgundy/wine with gold accents
-- "sage-garden" - Nature-inspired sage green, botanical
-- "amethyst-haze" - Soft purple/lavender, dreamy mystical
-`;
+import { initialFileStructure, AVAILABLE_THEMES } from './shared';
 
 export const INITIAL_SYSTEM_PROMPT = `You are an expert Next.js/TypeScript coding agent. Generate complete, working code for a Next.js 15 App Router project with Drizzle ORM.
 
@@ -139,47 +104,4 @@ EXAMPLE OUTPUT for a dashboard:
 }
 
 Return ONLY the JSON object, no markdown, no explanation.
-`;
-
-export const CONTEXT_SYSTEM_PROMPT = `You are continuing work on an existing Next.js 15 App Router project. Make the requested changes to the existing code.
-
-PRE-INSTALLED: shadcn button, card, input, dialog, tabs, avatar. Just import them.
-
-DATABASE: PostgreSQL with Drizzle ORM. Schema in /home/user/lib/db/schema.ts.
-
-${AVAILABLE_THEMES}
-
-CONTEXT PROVIDED: The user's message includes:
-- PROJECT name and description
-- CONVERSATION HISTORY (last 10 messages as JSON)
-- CURRENT page.tsx or relevant file content
-
-You MUST:
-1. Understand the project context and what was previously discussed
-2. Read the existing code structure
-3. Make ONLY the requested changes while preserving existing functionality
-4. Return the COMPLETE modified file, not just the changed parts
-
-YOUR OUTPUT FORMAT:
-Return ONLY valid JSON:
-{
-  "theme": "vercel",
-  "files": [
-    { "filePath": "/home/user/app/page.tsx", "content": "...complete updated file..." }
-  ],
-  "commands": []
-}
-
-RULES:
-1. Pick an appropriate theme if user mentions colors/style (or omit to keep current)
-2. Include COMPLETE file content for each modified file
-3. button, card, input, dialog, tabs, avatar are pre-installed
-4. For new shadcn components: "npx shadcn@latest add component-name --yes"
-5. Use absolute paths starting with /home/user
-6. Return "commands": [] if no new packages needed
-7. PRESERVE existing code unless explicitly asked to remove/change it
-8. Server Components are default; add "use client" only for interactive components
-9. For database changes, update /home/user/lib/db/schema.ts
-
-Return ONLY the JSON object.
 `;

@@ -23,6 +23,13 @@ export const PlanSchema = z.object({
     tasks: z.array(TaskSchema),
 });
 
+export const ExtendedPlanSchema = z.object({
+    projectType: z.enum(["full-stack", "frontend-only", "api-only", "update"]),
+    summary: z.string(),
+    requiresBackend: z.boolean(),
+    tasks: z.array(TaskSchema),
+});
+
 export const ReviewResultSchema = z.object({
     status: z.enum(["success", "issues"]),
     message: z.string().optional(),
@@ -34,6 +41,7 @@ export type FileContent = z.infer<typeof FileContentSchema>;
 export type CodeGeneration = z.infer<typeof CodeGenerationSchema>;
 export type Task = z.infer<typeof TaskSchema>;
 export type Plan = z.infer<typeof PlanSchema>;
+export type ExtendedPlan = z.infer<typeof ExtendedPlanSchema>;
 export type ReviewResult = z.infer<typeof ReviewResultSchema>;
 
 export interface WorkerResult {
