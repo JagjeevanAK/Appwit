@@ -38,15 +38,38 @@ export default function CodeEditor({ streamState }: CodeEditorProps) {
   const [hasInitialLoad, setHasInitialLoad] = useState(false);
   const processedChangesRef = useRef<number>(0);
 
-  const findFirstFile = useCallback((nodes: FileNode[]): FileNode | null => {
-    for (const node of nodes) {
-      if (node.kind === 'file') return node;
-      if (node.children) {
-        const found = findFirstFile(node.children);
-        if (found) return found;
+  // Find app/page.tsx specifically, fallback to first file
+  const findAppPageFile = useCallback((nodes: FileNode[]): FileNode | null => {
+    // First pass: look for app/page.tsx
+    const findPageTsx = (nodes: FileNode[]): FileNode | null => {
+      for (const node of nodes) {
+        if (node.kind === 'file' && node.path.endsWith('app/page.tsx')) {
+          return node;
+        }
+        if (node.children) {
+          const found = findPageTsx(node.children);
+          if (found) return found;
+        }
       }
-    }
-    return null;
+      return null;
+    };
+
+    const pageTsx = findPageTsx(nodes);
+    if (pageTsx) return pageTsx;
+
+    // Fallback: return first file found
+    const findFirstFile = (nodes: FileNode[]): FileNode | null => {
+      for (const node of nodes) {
+        if (node.kind === 'file') return node;
+        if (node.children) {
+          const found = findFirstFile(node.children);
+          if (found) return found;
+        }
+      }
+      return null;
+    };
+
+    return findFirstFile(nodes);
   }, []);
 
   const loadSandboxFiles = useCallback(async (isRefetch = false) => {
@@ -75,11 +98,11 @@ export default function CodeEditor({ streamState }: CodeEditorProps) {
         console.log('Files set, count:', fileTree.length);
 
         if (!isRefetch && !hasInitialLoad) {
-          const firstFile = findFirstFile(fileTree);
-          if (firstFile) {
-            console.log('First file found:', firstFile.name);
-            setOpenTabs([firstFile.id]);
-            setActiveFileId(firstFile.id);
+          const defaultFile = findAppPageFile(fileTree);
+          if (defaultFile) {
+            console.log('Default file found:', defaultFile.name, defaultFile.path);
+            setOpenTabs([defaultFile.id]);
+            setActiveFileId(defaultFile.id);
           }
           setHasInitialLoad(true);
         } else if (isRefetch && activeFileId) {
@@ -107,7 +130,7 @@ export default function CodeEditor({ streamState }: CodeEditorProps) {
         setIsLoadingFiles(false);
       }
     }
-  }, [sandboxId, listFiles, findFirstFile, hasInitialLoad, activeFileId, readFile]);
+  }, [sandboxId, listFiles, findAppPageFile, hasInitialLoad, activeFileId, readFile]);
 
   useEffect(() => {
     if (sandboxId && !hasInitialLoad) {

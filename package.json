@@ -2,8 +2,8 @@
     "name": "appwit",
     "private": true,
     "scripts": {
-        "build": "turbo run build",
-        "dev": "turbo run dev",
+        "build": "bun --bun turbo run build",
+        "dev": "bun --bun turbo run dev",
         "lint": "turbo run lint",
         "format": "prettier --write \"**/*.{ts,tsx,md}\"",
         "clean": "turbo run clean",
@@ -14,7 +14,7 @@
     "devDependencies": {
         "baseline-browser-mapping": "^2.8.32",
         "prettier": "^3.6.2",
-        "turbo": "^2.5.6",
+        "turbo": "^2.6.3",
         "typescript": "5.9.2"
     },
     "engines": {

@@ -1,8 +1,8 @@
 FROM oven/bun:1.3.2 AS builder
 
 WORKDIR /app
-ARG NEXT_PUBLIC_API_URL
-ENV NEXT_PUBLIC_API_URL=${NEXT_PUBLIC_API_URL}
+ARG NEXT_PUBLIC_BACKEND_URL
+ENV NEXT_PUBLIC_BACKEND_URL=${NEXT_PUBLIC_BACKEND_URL}
 
 COPY package.json bun.lock turbo.json ./
 
@@ -31,8 +31,6 @@ COPY --from=builder /app/apps/frontend/public ./apps/frontend/public
 RUN chown -R nextjs:nodejs /app
 
 USER nextjs
-
-EXPOSE 3000
 
 ENV PORT=3000
 ENV HOSTNAME="0.0.0.0"

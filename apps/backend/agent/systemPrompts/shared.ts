@@ -26,17 +26,47 @@ export const initialFileStructure = `
 `;
 
 export const AVAILABLE_THEMES = `
-AVAILABLE THEMES (choose one):
-- "vercel" - Vercel's black & white, ultra-minimal, developer-focused
-- "twitter" - Twitter/X bright blue, social media aesthetic
-- "darkmatter" - Developer-focused with monospace fonts, orange/amber primary
-- "caffeine" - Warm coffee-inspired, brown/amber colors
-- "claymorphism" - Soft clay-like 3D aesthetic, purple, playful
-- "graphite" - Minimalist grayscale, professional, sharp edges
-- "mocha-mousse" - Pantone 2025 warm cocoa, cozy and inviting
-- "elegant-luxury" - Premium burgundy/wine with gold accents
-- "sage-garden" - Nature-inspired sage green, botanical
-- "amethyst-haze" - Soft purple/lavender, dreamy mystical
+THEME SELECTION (MANDATORY - you MUST choose one):
+The theme CSS will be automatically copied from our theme library to globals.css.
+Do NOT generate or modify globals.css - the themeApplicator handles this automatically.
+
+AVAILABLE THEMES:
+
+1. "vercel" - Vercel's iconic black & white
+   Best for: Developer platforms, SaaS, tech startups, deployment tools, modern web apps
+
+2. "twitter" - Twitter/X bright blue
+   Best for: Social apps, communication platforms, news feeds, messaging, media
+
+3. "darkmatter" - Developer-focused with monospace fonts, orange/amber + teal
+   Best for: Developer tools, code editors, technical dashboards, CLI apps, documentation
+
+4. "caffeine" - Warm coffee-inspired, brown/amber
+   Best for: Coffee shops, food apps, cozy blogs, productivity apps, notes apps
+
+5. "claymorphism" - Soft clay-like 3D, purple, playful
+   Best for: Creative portfolios, design tools, kids apps, playful websites
+
+6. "graphite" - Minimalist grayscale, professional, sharp edges
+   Best for: Business apps, enterprise software, admin panels, minimalist sites
+
+7. "mocha-mousse" - Pantone 2025 warm cocoa, cozy
+   Best for: Lifestyle blogs, recipe apps, wellness apps, boutique shops
+
+8. "elegant-luxury" - Premium burgundy/wine with gold accents
+   Best for: Luxury brands, jewelry stores, high-end restaurants, fashion, premium services
+
+9. "sage-garden" - Nature-inspired sage green, botanical
+   Best for: Eco brands, plant shops, wellness apps, sustainable products
+
+10. "amethyst-haze" - Soft purple/lavender, dreamy mystical
+    Best for: Creative apps, music platforms, art portfolios, beauty products
+
+THEME SELECTION RULES:
+- ALWAYS set "theme": "themename" in your JSON output
+- The theme CSS is pre-built and will be copied automatically
+- Do NOT create or modify globals.css - theme is auto-applied
+- Choose the theme that BEST matches the project's industry/vibe
 `;
 
 export const PROJECT_STRUCTURE = `

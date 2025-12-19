@@ -60,12 +60,16 @@ export class LLMFactory {
                 return new ChatAnthropic({
                     model: this.model,
                     anthropicApiKey: process.env.ANTHROPIC_API_KEY,
+                    maxTokens: 64000,  // Claude Sonnet 4.5 max output
+                    temperature: 0,     // Deterministic output for code
                 });
 
             case 'openai':
                 return new ChatOpenAI({
                     model: this.model,
                     openAIApiKey: process.env.OPENAI_API_KEY,
+                    maxTokens: 16384,  // GPT-4o limit
+                    temperature: 0,
                 });
 
             case 'openrouter':
@@ -76,6 +80,8 @@ export class LLMFactory {
                         baseURL: "https://openrouter.ai/api/v1",
                         apiKey: process.env.OPENROUTER_API_KEY,
                     },
+                    maxTokens: 64000,  // Claude via OpenRouter max output
+                    temperature: 0,
                 });
         }
     }

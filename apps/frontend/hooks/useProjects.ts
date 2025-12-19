@@ -1,6 +1,6 @@
 "use client";
 
-import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
+import { useState, useEffect, useCallback } from "react";
 import { BackendUrl } from "@/config";
 
 export interface Project {
@@ -12,102 +12,80 @@ export interface Project {
     updatedAt: string;
 }
 
-async function fetchProjects(): Promise<Project[]> {
-    const token = localStorage.getItem("auth_token");
-
-    if (!token) {
-        return [];
-    }
-
-    const response = await fetch(`${BackendUrl}/project`, {
-        headers: {
-            "Authorization": `Bearer ${token}`
-        }
-    });
-
-    // Handle auth errors gracefully - don't throw, just return empty projects
-    if (response.status === 401 || response.status === 403) {
-        return [];
-    }
-
-    if (!response.ok) {
-        throw new Error("Failed to fetch projects");
-    }
-
-    return response.json();
-}
-
-async function deleteProjectApi(projectId: string): Promise<void> {
-    const token = localStorage.getItem("auth_token");
-    if (!token) {
-        throw new Error("Not authenticated");
-    }
-
-    const response = await fetch(`${BackendUrl}/project/${projectId}`, {
-        method: "DELETE",
-        headers: {
-            "Authorization": `Bearer ${token}`
-        }
-    });
-
-    if (!response.ok) {
-        throw new Error("Failed to delete project");
-    }
-}
-
 export function useProjects() {
-    const queryClient = useQueryClient();
+    const [projects, setProjects] = useState<Project[]>([]);
+    const [loading, setLoading] = useState(true);
+    const [error, setError] = useState<string | null>(null);
 
-    const {
-        data: projects = [],
-        isLoading: loading,
-        error,
-        refetch
-    } = useQuery({
-        queryKey: ['projects'],
-        queryFn: fetchProjects,
-        staleTime: 30000, // Consider data fresh for 30 seconds
-        refetchOnWindowFocus: true,
-    });
+    const fetchProjects = useCallback(async () => {
+        try {
+            setLoading(true);
+            const token = localStorage.getItem("auth_token");
 
-    const deleteMutation = useMutation({
-        mutationFn: deleteProjectApi,
-        onMutate: async (projectId) => {
-            // Cancel any outgoing refetches
-            await queryClient.cancelQueries({ queryKey: ['projects'] });
-
-            // Snapshot the previous value
-            const previousProjects = queryClient.getQueryData<Project[]>(['projects']);
-
-            // Optimistically update
-            queryClient.setQueryData<Project[]>(['projects'], (old) =>
-                old?.filter(p => p.id !== projectId) ?? []
-            );
-
-            return { previousProjects };
-        },
-        onError: (err, projectId, context) => {
-            // Rollback on error
-            if (context?.previousProjects) {
-                queryClient.setQueryData(['projects'], context.previousProjects);
+            if (!token) {
+                setProjects([]);
+                setLoading(false);
+                return;
             }
-        },
-        onSettled: () => {
-            // Refetch after mutation
-            queryClient.invalidateQueries({ queryKey: ['projects'] });
-        },
-    });
 
-    const deleteProject = async (projectId: string) => {
-        await deleteMutation.mutateAsync(projectId);
-        return true;
-    };
+            const response = await fetch(`${BackendUrl}/project`, {
+                headers: {
+                    "Authorization": `Bearer ${token}`
+                }
+            });
 
-    return {
-        projects,
-        loading,
-        error: error ? (error instanceof Error ? error.message : "Failed to fetch projects") : null,
-        refetch,
-        deleteProject
-    };
+            // Handle auth errors gracefully - don't throw, just return empty projects
+            if (response.status === 401 || response.status === 403) {
+                setProjects([]);
+                setLoading(false);
+                return;
+            }
+
+            if (!response.ok) {
+                throw new Error("Failed to fetch projects");
+            }
+
+            const data = await response.json();
+            setProjects(data);
+            setError(null);
+        } catch (err) {
+            console.error("Error fetching projects:", err);
+            setError(err instanceof Error ? err.message : "Failed to fetch projects");
+        } finally {
+            setLoading(false);
+        }
+    }, []);
+
+    const deleteProject = useCallback(async (projectId: string) => {
+        try {
+            const token = localStorage.getItem("auth_token");
+            if (!token) {
+                throw new Error("Not authenticated");
+            }
+
+            const response = await fetch(`${BackendUrl}/project/${projectId}`, {
+                method: "DELETE",
+                headers: {
+                    "Authorization": `Bearer ${token}`
+                }
+            });
+
+            if (!response.ok) {
+                throw new Error("Failed to delete project");
+            }
+
+            // Optimistically remove from local state
+            setProjects(prev => prev.filter(p => p.id !== projectId));
+            return true;
+        } catch (err) {
+            console.error("Error deleting project:", err);
+            throw err;
+        }
+    }, []);
+
+    useEffect(() => {
+        fetchProjects();
+    }, [fetchProjects]);
+
+    return { projects, loading, error, refetch: fetchProjects, deleteProject };
 }

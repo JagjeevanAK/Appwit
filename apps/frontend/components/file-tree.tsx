@@ -1,6 +1,6 @@
 "use client"
 
-import React, { useState } from "react";
+import React, { useState, useMemo } from "react";
 import { ChevronRight, ChevronDown, File, Folder, FolderOpen, Search } from "lucide-react";
 import { cn } from "@/lib/utils";
 
@@ -30,9 +30,9 @@ interface FileTreeItemProps {
 
 function nodeMatchesSearch(node: FileNode, query: string): boolean {
   if (!query) return true;
-  
+
   const lowerQuery = query.toLowerCase();
-  
+
   if (node.name.toLowerCase().includes(lowerQuery)) {
     return true;
   }
@@ -40,14 +40,39 @@ function nodeMatchesSearch(node: FileNode, query: string): boolean {
   if (node.children) {
     return node.children.some(child => nodeMatchesSearch(child, query));
   }
-  
+
+  return false;
+}
+
+// Check if a folder contains the active file (directly or nested)
+function folderContainsActiveFile(node: FileNode, activeId: string | undefined): boolean {
+  if (!activeId || node.kind !== "folder" || !node.children) return false;
+
+  for (const child of node.children) {
+    if (child.id === activeId) return true;
+    if (child.kind === "folder" && folderContainsActiveFile(child, activeId)) {
+      return true;
+    }
+  }
   return false;
 }
 
 function FileTreeItem({ node, activeId, onSelect, level, searchQuery = "" }: FileTreeItemProps) {
-  const [isExpanded, setIsExpanded] = useState(true);
+  // Auto-expand folders that contain the active file
+  const shouldAutoExpand = useMemo(() => {
+    return folderContainsActiveFile(node, activeId);
+  }, [node, activeId]);
+
+  const [isExpanded, setIsExpanded] = useState(shouldAutoExpand);
   const isActive = activeId === node.id;
   const isFolder = node.kind === "folder";
+
+  // Update expansion state when active file changes
+  React.useEffect(() => {
+    if (shouldAutoExpand && !isExpanded) {
+      setIsExpanded(true);
+    }
+  }, [shouldAutoExpand, isExpanded]);
 
   const shouldShow = nodeMatchesSearch(node, searchQuery);
   

@@ -83,12 +83,38 @@ export async function* streamOrchestrator(
 
     const graph = createGraph(sandbox);
 
+    // Create a write function for progressive file writing during codegen
+    const writeFilesToSandbox = async (files: FileContent[]): Promise<string[]> => {
+        const writtenPaths: string[] = [];
+        for (const file of files) {
+            try {
+                // Create directory if needed
+                const dir = file.filePath.substring(0, file.filePath.lastIndexOf('/'));
+                if (dir) {
+                    await sandbox.commands.run(`mkdir -p ${dir}`);
+                }
+                // Write file
+                await sandbox.files.write(file.filePath, file.content);
+                writtenPaths.push(file.filePath);
+                log.orchestrator(`[PROGRESSIVE] Written: ${file.filePath}`);
+            } catch (error) {
+                log.orchestrator(`[PROGRESSIVE] Failed to write ${file.filePath}:`, error);
+            }
+        }
+        return writtenPaths;
+    };
+
     yield { type: 'planning', message: 'Analyzing your request...' };
 
     try {
         const stream = graph.streamEvents(
             { prompt, systemPrompt, files: [], commands: [], writtenFiles: [] },
-            { version: "v2" }
+            {
+                version: "v2",
+                configurable: {
+                    writeFiles: writeFilesToSandbox
+                }
+            }
         );
 
         let files: FileContent[] = [];

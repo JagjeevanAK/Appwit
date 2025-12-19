@@ -109,7 +109,7 @@ export default function ChatBar({ streamState, initialPrompt }: ChatBarProps){
 
     return (
         <div className="h-full w-full bg-[#1D1D1D] pr-2 text-white flex flex-col">
-            <div className="grow overflow-auto p-4 space-y-4">
+            <div className="grow overflow-auto p-4 space-y-4 min-h-[400px]">
                 {messages.map((message, index) => (
                     message.type === 'user' ? (
                         <div 

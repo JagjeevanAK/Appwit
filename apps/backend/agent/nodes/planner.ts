@@ -50,6 +50,7 @@ export async function plannerNode(state: GraphStateType, config?: StreamConfig):
     log.planner(`Created plan with ${plan.tasks.length} tasks in ${duration}s`);
     log.planner(`Project type: ${plan.projectType}`);
     log.planner(`Requires backend: ${plan.requiresBackend}`);
+    log.planner(`Recommended theme: ${plan.recommendedTheme} (${plan.themeReason})`);
     plan.tasks.forEach(t => log.planner(`  Task ${t.id}: ${t.action} ${t.file}`));
 
     const planForState: Plan = {
@@ -65,6 +66,7 @@ export async function plannerNode(state: GraphStateType, config?: StreamConfig):
 
     return {
         plan: planForState,
-        projectType: plan.projectType
+        projectType: plan.projectType,
+        theme: plan.recommendedTheme  // Pass recommended theme directly to themeApplicator
     };
 }

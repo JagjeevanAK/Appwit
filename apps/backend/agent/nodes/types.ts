@@ -36,6 +36,8 @@ export type GraphStateType = typeof GraphState.State;
 export interface StreamConfig extends LangGraphRunnableConfig {
     configurable?: {
         streamCallback?: (event: StreamEvent) => void;
+        // Progressive writing: write files immediately after each batch
+        writeFiles?: (files: FileContent[]) => Promise<string[]>;
     };
 }
 

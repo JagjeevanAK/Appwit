@@ -74,8 +74,15 @@ export default function InputBox({
     const handleInput = () => {
         const textarea = textareaRef.current;
         if (textarea) {
+            // Reset height to auto to get accurate scrollHeight
             textarea.style.height = 'auto';
-            textarea.style.height = `${textarea.scrollHeight}px`;
+            // Parse maxHeight to get the pixel value (default 300px if not set)
+            const maxHeightValue = maxHeight ? parseInt(maxHeight.replace('px', '')) : 300;
+            // Set height to scrollHeight but cap at maxHeight
+            const newHeight = Math.min(textarea.scrollHeight, maxHeightValue);
+            textarea.style.height = `${newHeight}px`;
+            // Show overflow when content exceeds maxHeight
+            textarea.style.overflowY = textarea.scrollHeight > maxHeightValue ? 'auto' : 'hidden';
         }
     };
 
@@ -93,12 +100,11 @@ export default function InputBox({
     return (
         <div
             className={cn(
-                "relative flex flex-col w-full p-3 overflow-hidden border rounded-xl bg-background focus-within:ring-1 focus-within:ring-ring border-input shadow-sm transition-all duration-200"
+                "relative flex flex-col w-full p-3 border rounded-xl bg-background focus-within:ring-1 focus-within:ring-ring border-input shadow-sm transition-all duration-200"
             )}
             style={{
                 width: width,
-                height: height,
-                maxHeight: maxHeight?.startsWith('max-h-') ? undefined : maxHeight
+                height: height
             }}
         >
             <textarea
@@ -107,9 +113,8 @@ export default function InputBox({
                 onInput={handleInput}
                 onChange={(e) => setInput(e.target.value)}
                 className={cn(
-                    "w-full resize-none bg-transparent px-2 py-2 text-base outline-none placeholder:text-muted-foreground min-h-[60px] text-foreground",
-                    style,
-                    maxHeight?.startsWith('max-h-') ? maxHeight : undefined
+                    "w-full resize-none bg-transparent px-2 py-2 text-base outline-none placeholder:text-muted-foreground min-h-[60px] text-foreground overflow-hidden",
+                    style
                 )}
                 placeholder={currentPlaceholder}
                 value={input}

@@ -9,6 +9,11 @@ import { authMiddleware } from "../middleware/auth";
 
 const router = Router();
 
+// Health check endpoint for Docker/Kubernetes
+router.get("/health", (_req, res) => {
+    res.json({ status: "ok", timestamp: new Date().toISOString() });
+});
+
 router.use("/auth/signin", signinRouter);
 router.use("/auth/signup", signupRouter);
 router.use("/auth/google", googleRouter);

@@ -27,6 +27,8 @@ export const ExtendedPlanSchema = z.object({
     projectType: z.enum(["full-stack", "frontend-only", "api-only", "update"]),
     summary: z.string(),
     requiresBackend: z.boolean(),
+    recommendedTheme: z.string().describe("Theme name from available themes: vercel, twitter, darkmatter, caffeine, claymorphism, graphite, mocha-mousse, elegant-luxury, sage-garden, amethyst-haze"),
+    themeReason: z.string().describe("Brief explanation of why this theme fits the project"),
     tasks: z.array(TaskSchema),
 });
 
