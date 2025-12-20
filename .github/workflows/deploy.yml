@@ -1,0 +1,151 @@
+# name: Deploy to Digital Ocean
+
+# on:
+#   push:
+#     branches:
+#       - main
+#   workflow_dispatch:
+
+# env:
+#   REGISTRY: ghcr.io
+#   IMAGE_NAME: ${{ github.repository_owner }}/appwit
+
+# jobs:
+#   build-and-push:
+#     runs-on: ubuntu-latest
+#     permissions:
+#       contents: read
+#       packages: write
+
+#     steps:
+#       - name: Checkout code
+#         uses: actions/checkout@v4
+
+#       - name: Set lowercase image name
+#         id: image-name
+#         run: echo "IMAGE_NAME_LOWER=$(echo ${{ env.IMAGE_NAME }} | tr '[:upper:]' '[:lower:]')" >> $GITHUB_OUTPUT
+
+#       - name: Log in to Container Registry
+#         uses: docker/login-action@v3
+#         with:
+#           registry: ${{ env.REGISTRY }}
+#           username: ${{ github.actor }}
+#           password: ${{ secrets.GITHUB_TOKEN }}
+
+#       - name: Set up Docker Buildx
+#         uses: docker/setup-buildx-action@v3
+
+#       - name: Build and push Backend image
+#         uses: docker/build-push-action@v5
+#         with:
+#           context: .
+#           file: ./docker/backend.dockerfile
+#           push: true
+#           tags: |
+#             ${{ env.REGISTRY }}/${{ steps.image-name.outputs.IMAGE_NAME_LOWER }}/backend:latest
+#             ${{ env.REGISTRY }}/${{ steps.image-name.outputs.IMAGE_NAME_LOWER }}/backend:${{ github.sha }}
+#           cache-from: |
+#             type=registry,ref=${{ env.REGISTRY }}/${{ steps.image-name.outputs.IMAGE_NAME_LOWER }}/backend:buildcache
+#             type=gha,scope=backend
+#           cache-to: |
+#             type=registry,ref=${{ env.REGISTRY }}/${{ steps.image-name.outputs.IMAGE_NAME_LOWER }}/backend:buildcache,mode=max
+#             type=gha,mode=max,scope=backend
+
+#       - name: Build and push Frontend image
+#         uses: docker/build-push-action@v5
+#         with:
+#           context: .
+#           file: ./docker/frontend.dockerfile
+#           push: true
+#           build-args: |
+#             NEXT_PUBLIC_BACKEND_URL=${{ secrets.NEXT_PUBLIC_BACKEND_URL }}
+#           tags: |
+#             ${{ env.REGISTRY }}/${{ steps.image-name.outputs.IMAGE_NAME_LOWER }}/frontend:latest
+#             ${{ env.REGISTRY }}/${{ steps.image-name.outputs.IMAGE_NAME_LOWER }}/frontend:${{ github.sha }}
+#           cache-from: |
+#             type=registry,ref=${{ env.REGISTRY }}/${{ steps.image-name.outputs.IMAGE_NAME_LOWER }}/frontend:buildcache
+#             type=gha,scope=frontend
+#           cache-to: |
+#             type=registry,ref=${{ env.REGISTRY }}/${{ steps.image-name.outputs.IMAGE_NAME_LOWER }}/frontend:buildcache,mode=max
+#             type=gha,mode=max,scope=frontend
+
+#   deploy:
+#     needs: build-and-push
+#     runs-on: ubuntu-latest
+
+#     steps:
+#       - name: Checkout code
+#         uses: actions/checkout@v4
+
+#       - name: Create .env file on server
+#         uses: appleboy/ssh-action@v1.0.0
+#         with:
+#           host: ${{ secrets.DO_HOST }}
+#           username: ${{ secrets.DO_USERNAME }}
+#           key: ${{ secrets.DO_SSH_KEY }}
+#           port: ${{ secrets.DO_PORT }}
+#           script: |
+#             cd /home/deploy/appwit || exit 1
+#             rm -f .env
+#             cat > .env << 'EOF'
+#             # Database Configuration
+#             POSTGRES_DB=${{ secrets.POSTGRES_DB }}
+#             POSTGRES_USER=${{ secrets.POSTGRES_USER }}
+#             POSTGRES_PASSWORD=${{ secrets.POSTGRES_PASSWORD }}
+#             POSTGRES_PORT=5432
+
+#             # Backend Configuration
+#             NODE_ENV=production
+#             BACKEND_PORT=${{ secrets.BACKEND_PORT }}
+#             JWT_SECRET=${{ secrets.JWT_SECRET }}
+
+#             # E2B Sandbox Configuration
+#             E2B_API_KEY=${{ secrets.E2B_API_KEY }}
+#             TEMPLATE_ID=${{ secrets.TEMPLATE_ID }}
+
+#             # LLM Provider Configuration
+#             LLM_PROVIDER=${{ secrets.LLM_PROVIDER }}
+#             OPENROUTER_API_KEY=${{ secrets.OPENROUTER_API_KEY }}
+#             OPENROUTER_MODEL=${{ secrets.OPENROUTER_MODEL }}
+#             ANTHROPIC_API_KEY=${{ secrets.ANTHROPIC_API_KEY }}
+#             ANTHROPIC_MODEL=${{ secrets.ANTHROPIC_MODEL }}
+
+#             # Cloudflare R2 Storage
+#             R2_ACCOUNT_ID=${{ secrets.R2_ACCOUNT_ID }}
+#             R2_ACCESS_KEY_ID=${{ secrets.R2_ACCESS_KEY_ID }}
+#             R2_SECRET_ACCESS_KEY=${{ secrets.R2_SECRET_ACCESS_KEY }}
+#             R2_BUCKET_NAME=${{ secrets.R2_BUCKET_NAME }}
+
+#             # Frontend Configuration
+#             FRONTEND_PORT=${{ secrets.FRONTEND_PORT }}
+#             NEXT_PUBLIC_BACKEND_URL=${{ secrets.NEXT_PUBLIC_BACKEND_URL }}
+
+#             # Google OAuth
+#             GOOGLE_CLIENT_ID=${{ secrets.GOOGLE_CLIENT_ID }}
+#             GOOGLE_CLIENT_SECRET=${{ secrets.GOOGLE_CLIENT_SECRET }}
+
+#             # CORS
+#             CORS_ORIGINS=${{ secrets.CORS_ORIGINS }}
+#             EOF
+#             chmod 600 .env
+#             echo ".env file created successfully"
+
+#       - name: Deploy to Digital Ocean Droplet
+#         uses: appleboy/ssh-action@v1.0.0
+#         with:
+#           host: ${{ secrets.DO_HOST }}
+#           username: ${{ secrets.DO_USERNAME }}
+#           key: ${{ secrets.DO_SSH_KEY }}
+#           port: ${{ secrets.DO_PORT }}
+#           script: |
+#             cd /home/deploy/appwit || exit 1
+#             git pull origin main
+#             echo "${{ secrets.GITHUB_TOKEN }}" | docker login ghcr.io -u ${{ github.actor }} --password-stdin
+#             docker pull ghcr.io/${{ github.repository_owner }}/appwit/backend:latest
+#             docker pull ghcr.io/${{ github.repository_owner }}/appwit/frontend:latest
+#             export BACKEND_IMAGE=ghcr.io/${{ github.repository_owner }}/appwit/backend:latest
+#             export FRONTEND_IMAGE=ghcr.io/${{ github.repository_owner }}/appwit/frontend:latest
+#             docker compose down
+#             docker compose up -d
+#             docker image prune -af
+#             docker compose ps
